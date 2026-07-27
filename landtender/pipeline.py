@@ -159,7 +159,9 @@ def notify(config: Config, storage: Storage, result: RunResult, dry_run: bool = 
     )
 
     if dry_run:
-        print("\n\n----- сообщение -----\n\n".join(blocks))
+        from .report import preview_messages
+
+        print(preview_messages(blocks))
         return 0
 
     notifier = TelegramNotifier(

@@ -16,7 +16,7 @@ from pathlib import Path
 from .config import load_config
 from .models import TIER_PREMIUM, TIER_STANDARD, TIER_UNKNOWN
 from .pipeline import notify, open_storage, probe_sources, run_once, stored_lots
-from .report import build_console_report, export_csv, export_json
+from .report import build_console_report, export_csv, export_json, preview_messages
 from .sources import SOURCES_BY_NAME
 
 log = logging.getLogger("landtender")
@@ -64,6 +64,17 @@ def build_parser() -> argparse.ArgumentParser:
     export_cmd.add_argument("--days", type=int, help="только лоты, впервые увиденные за N дней")
 
     sub.add_parser("stats", help="показать состояние базы и последний запуск")
+
+    setup_cmd = sub.add_parser(
+        "setup", help="мастер настройки Telegram: токен, канал, .env и пробная сводка"
+    )
+    setup_cmd.add_argument("--env-file", help="куда записать .env (по умолчанию в текущий каталог)")
+    setup_cmd.add_argument("--no-demo", action="store_true", help="не слать демонстрационную сводку")
+
+    demo_cmd = sub.add_parser(
+        "demo", help="отправить в канал демонстрационную сводку на вымышленных данных"
+    )
+    demo_cmd.add_argument("--dry-run", action="store_true", help="показать в консоли, не отправляя")
 
     tg_cmd = sub.add_parser(
         "telegram-test", help="проверить подключение к Telegram и отправить пробное сообщение"
@@ -140,6 +151,46 @@ def cmd_export(args: argparse.Namespace) -> int:
     writer = export_csv if args.format == "csv" else export_json
     writer(lots, path)
     print(f"Выгружено лотов: {len(lots)} → {path}")
+    return 0
+
+
+def cmd_setup(args: argparse.Namespace) -> int:
+    from .config import ENV_FILE_NAME
+    from .setup_wizard import run_wizard
+
+    config = load_config(args.config)
+    env_path = Path(args.env_file) if args.env_file else Path.cwd() / ENV_FILE_NAME
+    return run_wizard(
+        env_path=env_path,
+        send_demo=not args.no_demo,
+        threshold_usd=config.threshold_usd,
+    )
+
+
+def cmd_demo(args: argparse.Namespace) -> int:
+    """Показывает, как выглядит сводка, на вымышленных данных."""
+    from .demo import demo_blocks
+    from .notify import TelegramError, TelegramNotifier
+
+    config = load_config(args.config)
+    blocks = demo_blocks(config.threshold_usd)
+
+    if args.dry_run:
+        print(preview_messages(blocks))
+        return 0
+
+    token = config.get("telegram", "bot_token")
+    chat_id = config.get("telegram", "chat_id")
+    if not token or not chat_id:
+        print("✗ Нет токена или канала. Запустите: landtender setup")
+        return 2
+
+    try:
+        sent = TelegramNotifier(bot_token=str(token), chat_id=str(chat_id)).send_blocks(blocks)
+    except TelegramError as exc:
+        print(f"✗ Отправка не прошла: {exc}")
+        return 1
+    print(f"✓ Демонстрационная сводка отправлена ({sent} сообщ.) — проверьте канал")
     return 0
 
 
@@ -248,6 +299,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_stats(args)
     if command == "telegram-test":
         return cmd_telegram_test(args)
+    if command == "setup":
+        return cmd_setup(args)
+    if command == "demo":
+        return cmd_demo(args)
 
     parser.print_help()
     return 2

@@ -158,6 +158,18 @@ def build_telegram_digest(
     return blocks
 
 
+def preview_messages(blocks: Sequence[str]) -> str:
+    """Показывает сводку так, как она придёт в канал — по сообщениям, а не блокам."""
+    from .notify.telegram import chunk_blocks
+
+    messages = chunk_blocks(blocks)
+    parts = []
+    for number, message in enumerate(messages, start=1):
+        parts.append(f"───── сообщение {number}/{len(messages)} ({len(message)} симв.) ─────")
+        parts.append(message)
+    return "\n".join(parts)
+
+
 # ---------------------------------------------------------------- консоль ---
 
 
