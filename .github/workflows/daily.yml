@@ -41,14 +41,31 @@ jobs:
       - name: Собрать конфиг
         run: cp landtender.example.toml landtender.toml
 
-      - name: Запуск
+      - name: Проверить, что секреты заданы
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          landtender run \
-            ${{ inputs.dry_run && '--dry-run' || '' }} \
-            --export-csv "data/new-$(date +%F).csv"
+          missing=""
+          [ -z "$TELEGRAM_BOT_TOKEN" ] && missing="$missing TELEGRAM_BOT_TOKEN"
+          [ -z "$TELEGRAM_CHAT_ID" ] && missing="$missing TELEGRAM_CHAT_ID"
+          if [ -n "$missing" ]; then
+            echo "::error::Не заданы секреты репозитория:$missing"
+            echo "Добавьте их: Settings → Secrets and variables → Actions"
+            exit 1
+          fi
+          echo "Секреты на месте."
+
+      - name: Запуск
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Контекст inputs пуст при запуске по расписанию — приводим к флагу в shell
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          flags=""
+          [ "$DRY_RUN" = "true" ] && flags="--dry-run"
+          landtender run $flags --export-csv "data/new-$(date +%F).csv"
 
       - name: Сохранить выгрузку как артефакт
         if: always()
