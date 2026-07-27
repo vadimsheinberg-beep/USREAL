@@ -1,0 +1,22 @@
+[Unit]
+Description=Ежедневный сбор земельных тендеров Израиля
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/usreal
+# Токены держите в файле с правами 600, а не в юните
+EnvironmentFile=/etc/landtender.env
+ExecStart=/opt/usreal/.venv/bin/landtender run
+TimeoutStartSec=3600
+
+# Программе достаточно писать только в свой каталог данных
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/usreal/data
+
+[Install]
+WantedBy=multi-user.target

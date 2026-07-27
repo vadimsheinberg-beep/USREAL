@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "landtender"
+version = "0.1.0"
+description = "Ежедневный трекер израильских земельных тендеров с оценкой стоимости земли и количества единиц строений"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "requests>=2.28",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+landtender = "landtender.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["landtender*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

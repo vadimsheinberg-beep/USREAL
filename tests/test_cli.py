@@ -1,0 +1,114 @@
+"""Командная строка: коды возврата и выгрузки."""
+
+import json
+
+import pytest
+
+from landtender import cli, pipeline
+from landtender.models import Lot, RunResult, SourceReport
+from landtender.money import FxRate
+from landtender.sources.base import Source
+
+
+class OneLotSource(Source):
+    name = "fake"
+    title = "тестовый источник"
+
+    def fetch(self):
+        return [Lot(source="fake", source_id="1", tender_name="חי/142", units=60, price_nis=18_500_000.0)]
+
+
+class BrokenSource(Source):
+    name = "broken"
+    title = "падающий источник"
+
+    def fetch(self):
+        raise RuntimeError("портал недоступен")
+
+
+@pytest.fixture
+def config_file(tmp_path):
+    path = tmp_path / "landtender.toml"
+    path.write_text(
+        f'[general]\ndb_path = "{tmp_path / "cli.sqlite3"}"\n'
+        "[sources.fake]\nenabled = true\n"
+        "[telegram]\nenabled = false\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+@pytest.fixture(autouse=True)
+def wire_fakes(monkeypatch):
+    monkeypatch.setattr(pipeline, "SOURCES_BY_NAME", {"fake": OneLotSource, "broken": BrokenSource})
+    monkeypatch.setattr(cli, "SOURCES_BY_NAME", {"fake": OneLotSource, "broken": BrokenSource})
+    monkeypatch.setattr(pipeline, "get_fx", lambda *a, **k: FxRate(3.6412, "2026-07-27", "test"))
+    monkeypatch.setattr(pipeline, "build_http", lambda config: object())
+
+
+class TestRun:
+    def test_successful_run_returns_zero(self, config_file, capsys):
+        code = cli.main(["--config", str(config_file), "run", "--sources", "fake", "--no-notify"])
+        assert code == 0
+        assert "ЗЕМЕЛЬНЫЕ ТЕНДЕРЫ ИЗРАИЛЯ" in capsys.readouterr().out
+
+    def test_all_sources_failing_returns_one(self, config_file):
+        code = cli.main(["--config", str(config_file), "run", "--sources", "broken", "--no-notify"])
+        assert code == 1
+
+    def test_threshold_override_is_applied(self, config_file, capsys):
+        cli.main(
+            ["--config", str(config_file), "run", "--sources", "fake",
+             "--threshold-usd", "10000000", "--no-notify"]
+        )
+        assert "Дешевле порога" in capsys.readouterr().out
+
+    def test_export_csv_flag_writes_file(self, config_file, tmp_path):
+        out = tmp_path / "new.csv"
+        cli.main(
+            ["--config", str(config_file), "run", "--sources", "fake", "--no-notify",
+             "--export-csv", str(out)]
+        )
+        assert out.exists()
+        assert "price_usd" in out.read_text("utf-8-sig")
+
+
+class TestExportCommand:
+    def test_exports_accumulated_lots_to_json(self, config_file, tmp_path):
+        cli.main(["--config", str(config_file), "run", "--sources", "fake", "--no-notify"])
+        out = tmp_path / "all.json"
+        code = cli.main(["--config", str(config_file), "export", "--format", "json", "--out", str(out)])
+
+        assert code == 0
+        rows = json.loads(out.read_text("utf-8"))
+        assert rows[0]["units"] == 60
+        assert rows[0]["tier"] == "premium"
+
+    def test_tier_filter(self, config_file, tmp_path):
+        cli.main(["--config", str(config_file), "run", "--sources", "fake", "--no-notify"])
+        out = tmp_path / "standard.json"
+        cli.main(
+            ["--config", str(config_file), "export", "--format", "json",
+             "--tier", "standard", "--out", str(out)]
+        )
+        assert json.loads(out.read_text("utf-8")) == []
+
+
+class TestCheckCommand:
+    def test_reports_ok_and_failed_sources(self, config_file, capsys, monkeypatch):
+        code = cli.main(["--config", str(config_file), "check", "--sources", "fake", "broken"])
+        out = capsys.readouterr().out
+        assert "[ ok ] fake" in out
+        assert "[FAIL] broken" in out
+        assert code == 1
+
+
+def test_stats_command_reports_empty_database(config_file, capsys):
+    assert cli.main(["--config", str(config_file), "stats"]) == 0
+    assert "Запусков ещё не было" in capsys.readouterr().out
+
+
+def test_help_is_available():
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(["--help"])
+    assert excinfo.value.code == 0

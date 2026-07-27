@@ -1,0 +1,60 @@
+name: Ежедневный сбор тендеров
+
+on:
+  schedule:
+    # 06:00 UTC = 09:00 по Израилю летом
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Прогон без отправки в Telegram"
+        type: boolean
+        default: false
+
+concurrency:
+  group: landtender-daily
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Установить зависимости
+        run: pip install -e .
+
+      - name: Восстановить базу с прошлого запуска
+        uses: actions/cache@v4
+        with:
+          path: data
+          key: landtender-db-${{ github.run_id }}
+          restore-keys: landtender-db-
+
+      - name: Собрать конфиг
+        run: cp landtender.example.toml landtender.toml
+
+      - name: Запуск
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          landtender run \
+            ${{ inputs.dry_run && '--dry-run' || '' }} \
+            --export-csv "data/new-$(date +%F).csv"
+
+      - name: Сохранить выгрузку как артефакт
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: landtender-${{ github.run_id }}
+          path: data/*.csv
+          if-no-files-found: ignore
+          retention-days: 30

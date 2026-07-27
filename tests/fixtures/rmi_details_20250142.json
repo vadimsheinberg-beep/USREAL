@@ -1,0 +1,45 @@
+{
+  "MichrazID": 20250142,
+  "MichrazName": "חי/142/2025",
+  "Yishuv": "חיפה",
+  "Shchuna": "נווה שאנן",
+  "StatusMichraz": 1,
+  "SchumArvut": 250000,
+  "Tik": {
+    "TikID": 887766,
+    "Migrashim": [
+      {
+        "MigrashNumber": "1",
+        "Gush": "10769",
+        "Chelka": "42",
+        "Area": 4200.0,
+        "YechidotDiur": 60,
+        "MinPrice": 18500000.0,
+        "ShumaPrice": 19100000.0,
+        "DevelopmentCosts": 3400000.0
+      },
+      {
+        "MigrashNumber": "2",
+        "Gush": "10769",
+        "Chelka": "43",
+        "Area": 1850.0,
+        "YechidotDiur": 24,
+        "MinPrice": 2900000.0,
+        "ShumaPrice": 3050000.0,
+        "DevelopmentCosts": 900000.0,
+        "FinalPrice": 3610000.0
+      },
+      {
+        "MigrashNumber": "3",
+        "Gush": "10770",
+        "Chelka": "7",
+        "Area": 900.0,
+        "YechidotDiur": 12,
+        "MinPrice": 1100000.0
+      }
+    ]
+  },
+  "MichrazDocList": [
+    {"DocType": "חוברת מכרז", "Title": "חוברת", "UpdateDate": "2026-07-10T00:00:00"}
+  ]
+}

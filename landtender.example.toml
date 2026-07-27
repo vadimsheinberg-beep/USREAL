@@ -1,0 +1,69 @@
+# Конфигурация landtender.
+# Скопируйте в landtender.toml и правьте под себя.
+# Секреты пишите как "env:ИМЯ_ПЕРЕМЕННОЙ" — значение возьмётся из окружения.
+
+[general]
+# Порог отсечки в долларах. Лоты >= порога попадают в группу «дороже порога».
+threshold_usd = 1_000_000
+# Глубина просмотра в днях для источников, поддерживающих фильтр по дате.
+lookback_days = 30
+db_path = "data/landtender.sqlite3"
+user_agent = "landtender/0.1 (+https://github.com/vadimsheinberg-beep/usreal)"
+request_timeout = 45
+# Пауза между запросами, секунды. Ниже 0.5 израильские порталы отдают 429.
+rate_limit_delay = 1.0
+
+[fx]
+# boi — официальный представительный курс Банка Израиля; static — курс из конфига.
+provider = "boi"
+static_usd_ils = 3.70
+cache_hours = 12
+
+[valuation]
+# Что считать «стоимостью земли», по убыванию приоритета:
+# final — цена сделки, min — минимальная цена, appraisal — шумá, asking — запрос продавца.
+price_preference = ["final", "min", "appraisal", "asking"]
+# Прибавлять ли расходы на развитие (הוצאות פיתוח) к стоимости земли.
+include_development_costs = false
+# Держать ли в базе лоты без цены (их нельзя отнести ни к одной группе).
+keep_priceless = true
+
+# ------------------------------- источники ---------------------------------
+
+[sources.rmi_michrazim]
+# Управление земель Израиля — основной государственный реестр земельных тендеров.
+enabled = true
+# Сколько тендеров за запуск догружать деталями (там лежат цены участков).
+details_budget = 400
+# true — только активные тендеры.
+active_only = false
+
+[sources.data_gov_il]
+# Портал открытых данных правительства.
+enabled = true
+max_rows = 2000
+queries = ["מכרזי מקרקעין", "מכרזים רשות מקרקעי ישראל", "עסקאות מקרקעין"]
+
+[sources.gov_mr]
+# Портал государственных закупок (мr.gov.il). Вспомогательный: цена есть не всегда.
+enabled = true
+max_pages = 5
+keywords = ["מקרקעין", "מגרש"]
+
+[sources.yad2]
+# Частная площадка объявлений. 39 — категория «מגרשים» (участки).
+enabled = true
+max_pages = 5
+property_types = [39]
+# Если площадка потребует сессию — положите сюда куки: cookie = "env:YAD2_COOKIE"
+
+# ------------------------------ уведомления --------------------------------
+
+[telegram]
+enabled = true
+bot_token = "env:TELEGRAM_BOT_TOKEN"
+chat_id = "env:TELEGRAM_CHAT_ID"
+# false — присылать только лоты дороже порога.
+send_standard_tier = true
+max_lots_per_tier = 25
+notify_changes = true
