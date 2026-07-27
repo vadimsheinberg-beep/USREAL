@@ -55,24 +55,54 @@ cp landtender.example.toml landtender.toml
 
 Требуется Python 3.11+ (используется stdlib-модуль `tomllib`).
 
-## Telegram
+## Подключение Telegram-канала
 
 1. Создайте бота у [@BotFather](https://t.me/BotFather) → получите токен.
-2. Узнайте `chat_id`: напишите боту и откройте
-   `https://api.telegram.org/bot<ТОКЕН>/getUpdates`.
-3. Задайте переменные окружения:
+2. Добавьте бота **администратором** вашего канала и напишите туда любое
+   сообщение.
+3. Положите токен в файл `.env` рядом с конфигом:
 
 ```bash
-export TELEGRAM_BOT_TOKEN="123456:AA..."
-export TELEGRAM_CHAT_ID="-1001234567890"
+cp .env.example .env
+$EDITOR .env          # вписать TELEGRAM_BOT_TOKEN
 ```
 
-Токен в конфиге не хранится: там стоит ссылка `env:TELEGRAM_BOT_TOKEN`.
+4. Узнайте `chat_id` канала и допишите его в `.env`:
+
+```bash
+landtender telegram-test --discover
+#   -1001234567890   channel    Земельные тендеры
+```
+
+5. Проверьте всю цепочку — токен, доступ к каналу, отправку:
+
+```bash
+landtender telegram-test
+# ✓ Токен принят: @my_land_bot (Land)
+# ✓ Канал доступен: Земельные тендеры (id -1001234567890)
+# ✓ Пробное сообщение отправлено
+```
+
+Вместо `.env` можно задать обычные переменные окружения
+`TELEGRAM_BOT_TOKEN` и `TELEGRAM_CHAT_ID` — они приоритетнее файла, так это
+и работает в GitHub Actions. Токен не хранится ни в конфиге, ни в git: в
+`landtender.toml` стоит только ссылка `env:TELEGRAM_BOT_TOKEN`, а `.env`
+внесён в `.gitignore`.
+
+Кроме текстовой сводки в тот же канал уходит CSV со всеми новыми лотами
+(`attach_csv = true` в секции `[telegram]`). Если файл не проходит — сводка
+всё равно считается доставленной, и завтра лоты не придут повторно.
+
+У каналов `chat_id` отрицательный и начинается с `-100`. Если `--discover`
+ничего не находит: боту уже назначен вебхук либо апдейты вычитаны — тогда
+проще посмотреть id в
+`https://api.telegram.org/bot<ТОКЕН>/getUpdates` вручную.
 
 ## Запуск
 
 ```bash
 landtender check                       # проверить доступность источников
+landtender telegram-test               # проверить подключение канала
 landtender run --dry-run               # прогон без отправки: сводка в консоль
 landtender run                         # ежедневный запуск
 landtender run --sources rmi_michrazim # только один источник

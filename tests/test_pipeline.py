@@ -157,6 +157,80 @@ class TestNotify:
         assert pipeline.notify(config, storage, result, dry_run=True) == 0
         assert "Земельные тендеры Израиля" in capsys.readouterr().out
 
+    def test_csv_is_attached_when_enabled(self, storage, monkeypatch):
+        documents = []
+
+        class FakeNotifier:
+            def __init__(self, **kwargs):
+                pass
+
+            def send_blocks(self, blocks):
+                return 1
+
+            def send_document(self, path, caption=None):
+                documents.append((path.name, path.read_text("utf-8-sig"), caption))
+
+        monkeypatch.setattr("landtender.notify.TelegramNotifier", FakeNotifier)
+
+        FakeSource.batches = [[lot()]]
+        config = make_config()
+        config.data["telegram"].update({"enabled": True, "attach_csv": True})
+        result = pipeline.run_once(config, storage, only_sources=["fake"])
+        pipeline.notify(config, storage, result)
+
+        assert len(documents) == 1
+        name, content, caption = documents[0]
+        assert name.endswith(".csv")
+        assert "price_usd" in content
+        assert "Новые лоты" in caption
+
+    def test_csv_is_not_attached_when_disabled(self, storage, monkeypatch):
+        documents = []
+
+        class FakeNotifier:
+            def __init__(self, **kwargs):
+                pass
+
+            def send_blocks(self, blocks):
+                return 1
+
+            def send_document(self, path, caption=None):
+                documents.append(path)
+
+        monkeypatch.setattr("landtender.notify.TelegramNotifier", FakeNotifier)
+
+        FakeSource.batches = [[lot()]]
+        config = make_config()
+        config.data["telegram"].update({"enabled": True, "attach_csv": False})
+        result = pipeline.run_once(config, storage, only_sources=["fake"])
+        pipeline.notify(config, storage, result)
+
+        assert documents == []
+
+    def test_failed_csv_attachment_does_not_cancel_the_digest(self, storage, monkeypatch):
+        from landtender.notify import TelegramError
+
+        class FakeNotifier:
+            def __init__(self, **kwargs):
+                pass
+
+            def send_blocks(self, blocks):
+                return 1
+
+            def send_document(self, path, caption=None):
+                raise TelegramError("413 файл слишком большой")
+
+        monkeypatch.setattr("landtender.notify.TelegramNotifier", FakeNotifier)
+
+        FakeSource.batches = [[lot()]]
+        config = make_config()
+        config.data["telegram"].update({"enabled": True, "attach_csv": True})
+        result = pipeline.run_once(config, storage, only_sources=["fake"])
+
+        assert pipeline.notify(config, storage, result) == 1
+        # Лоты помечены отправленными, значит завтра не придут повторно
+        assert storage.was_notified(result.new_lots[0].uid, "new") is True
+
     def test_already_notified_lots_are_not_resent(self, storage, monkeypatch):
         sent_batches = []
 
@@ -167,6 +241,9 @@ class TestNotify:
             def send_blocks(self, blocks):
                 sent_batches.append(blocks)
                 return len(blocks)
+
+            def send_document(self, path, caption=None):
+                pass
 
         monkeypatch.setattr("landtender.notify.TelegramNotifier", FakeNotifier)
 

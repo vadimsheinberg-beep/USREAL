@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
+import tempfile
 import time
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 from .config import Config
 from .http import HttpClient
@@ -171,6 +172,14 @@ def notify(config: Config, storage: Storage, result: RunResult, dry_run: bool = 
         log.error("Telegram: %s", exc)
         raise
 
+    if telegram.get("attach_csv", False) and fresh:
+        # Сводка уже доставлена; неудача с файлом не должна её отменять,
+        # иначе лоты не пометятся отправленными и придут ещё раз завтра.
+        try:
+            _attach_csv(notifier, fresh, result.started_at[:10])
+        except TelegramError as exc:
+            log.warning("Telegram: не удалось приложить CSV: %s", exc)
+
     now = utcnow_iso()
     for lot in fresh:
         storage.mark_notified(lot.uid, "new", now)
@@ -178,6 +187,15 @@ def notify(config: Config, storage: Storage, result: RunResult, dry_run: bool = 
         storage.mark_notified(f"{lot.uid}:{lot.content_hash()[:12]}", "changed", now)
     storage.commit()
     return sent
+
+
+def _attach_csv(notifier: Any, lots: list[Lot], day: str) -> None:
+    """Прикладывает к сводке CSV с новыми лотами — таблицей их удобнее смотреть."""
+    from .report import export_csv
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = export_csv(lots, Path(tmp) / f"landtender-{day}.csv")
+        notifier.send_document(path, caption=f"Новые лоты за {day}: {len(lots)}")
 
 
 def probe_sources(config: Config, only_sources: Sequence[str] | None = None) -> list[SourceReport]:

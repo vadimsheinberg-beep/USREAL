@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_CONFIG_NAMES = ("landtender.toml", "config.toml")
+ENV_FILE_NAME = ".env"
 
 #: Значения по умолчанию. Файл конфигурации накладывается поверх них.
 DEFAULTS: dict[str, Any] = {
@@ -47,6 +48,8 @@ DEFAULTS: dict[str, Any] = {
         "send_standard_tier": True,
         "max_lots_per_tier": 25,
         "notify_changes": True,
+        # Прикладывать к сводке CSV с новыми лотами отдельным файлом
+        "attach_csv": True,
     },
 }
 
@@ -59,6 +62,50 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
         else:
             out[key] = value
     return out
+
+
+def parse_env_file(text: str) -> dict[str, str]:
+    """Разбирает содержимое ``.env``: ``КЛЮЧ=значение``, по паре на строку.
+
+    Понимает комментарии, префикс ``export`` и кавычки вокруг значения.
+    """
+    values: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :]
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        values[key] = value
+    return values
+
+
+def load_env_file(directory: Path) -> dict[str, str]:
+    """Подмешивает ``.env`` из каталога в окружение процесса.
+
+    Уже заданные переменные окружения приоритетнее файла: в CI секреты
+    приходят из хранилища секретов, и файл не должен их перебивать.
+    """
+    path = directory / ENV_FILE_NAME
+    if not path.exists():
+        return {}
+    try:
+        values = parse_env_file(path.read_text("utf-8"))
+    except OSError:
+        return {}
+    applied = {}
+    for key, value in values.items():
+        if key not in os.environ:
+            os.environ[key] = value
+            applied[key] = value
+    return applied
 
 
 def resolve_secret(value: Any) -> Any:
@@ -118,8 +165,13 @@ def find_config(explicit: str | os.PathLike[str] | None = None) -> Path | None:
 
 
 def load_config(explicit: str | os.PathLike[str] | None = None) -> Config:
-    """Читает конфиг; при отсутствии файла возвращает значения по умолчанию."""
+    """Читает конфиг; при отсутствии файла возвращает значения по умолчанию.
+
+    Заодно подхватывает ``.env`` рядом с конфигом (или в текущем каталоге) —
+    чтобы токен бота можно было положить в файл, а не экспортировать руками.
+    """
     path = find_config(explicit)
+    load_env_file(path.parent if path else Path.cwd())
     if path is None:
         return Config()
     with path.open("rb") as fh:

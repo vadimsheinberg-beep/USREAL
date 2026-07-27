@@ -2,6 +2,9 @@
 landtender.toml
 config.toml
 
+# Секреты: токен бота и chat_id (пример лежит в .env.example)
+.env
+
 # Данные и выгрузки
 data/
 *.sqlite3

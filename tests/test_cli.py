@@ -103,6 +103,104 @@ class TestCheckCommand:
         assert code == 1
 
 
+class TestTelegramTestCommand:
+    @pytest.fixture(autouse=True)
+    def clean_env(self, monkeypatch):
+        monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+        monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+
+    def test_missing_token_explains_what_to_set(self, config_file, capsys):
+        assert cli.main(["--config", str(config_file), "telegram-test"]) == 2
+        assert "TELEGRAM_BOT_TOKEN" in capsys.readouterr().out
+
+    def test_missing_chat_id_points_to_discover(self, config_file, capsys, monkeypatch):
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:AA")
+        assert cli.main(["--config", str(config_file), "telegram-test"]) == 2
+        assert "--discover" in capsys.readouterr().out
+
+    def test_happy_path_checks_token_channel_and_sends(self, config_file, capsys, monkeypatch):
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:AA")
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "-1001")
+
+        class FakeNotifier:
+            def __init__(self, **kwargs):
+                pass
+
+            def get_me(self):
+                return {"username": "land_bot", "first_name": "Land"}
+
+            def get_chat(self):
+                return {"id": -1001, "title": "Тендеры"}
+
+            def send_blocks(self, blocks):
+                return 1
+
+        monkeypatch.setattr("landtender.notify.TelegramNotifier", FakeNotifier)
+
+        assert cli.main(["--config", str(config_file), "telegram-test"]) == 0
+        out = capsys.readouterr().out
+        assert "@land_bot" in out
+        assert "Тендеры" in out
+        assert "Пробное сообщение отправлено" in out
+
+    def test_bad_token_returns_one(self, config_file, capsys, monkeypatch):
+        from landtender.notify import TelegramError
+
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:AA")
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "-1001")
+
+        class FakeNotifier:
+            def __init__(self, **kwargs):
+                pass
+
+            def get_me(self):
+                raise TelegramError("Unauthorized")
+
+        monkeypatch.setattr("landtender.notify.TelegramNotifier", FakeNotifier)
+
+        assert cli.main(["--config", str(config_file), "telegram-test"]) == 1
+        assert "Токен отклонён" in capsys.readouterr().out
+
+    def test_discover_lists_chat_ids(self, config_file, capsys, monkeypatch):
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:AA")
+
+        class FakeNotifier:
+            def __init__(self, **kwargs):
+                pass
+
+            def discover_chats(self):
+                return [{"chat_id": -1001, "title": "Тендеры", "type": "channel"}]
+
+        monkeypatch.setattr("landtender.notify.TelegramNotifier", FakeNotifier)
+
+        assert cli.main(["--config", str(config_file), "telegram-test", "--discover"]) == 0
+        assert "-1001" in capsys.readouterr().out
+
+    def test_no_send_skips_the_test_message(self, config_file, capsys, monkeypatch):
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:AA")
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "-1001")
+        sent = []
+
+        class FakeNotifier:
+            def __init__(self, **kwargs):
+                pass
+
+            def get_me(self):
+                return {"username": "land_bot"}
+
+            def get_chat(self):
+                return {"id": -1001, "title": "Тендеры"}
+
+            def send_blocks(self, blocks):
+                sent.append(blocks)
+                return 1
+
+        monkeypatch.setattr("landtender.notify.TelegramNotifier", FakeNotifier)
+
+        assert cli.main(["--config", str(config_file), "telegram-test", "--no-send"]) == 0
+        assert sent == []
+
+
 def test_stats_command_reports_empty_database(config_file, capsys):
     assert cli.main(["--config", str(config_file), "stats"]) == 0
     assert "Запусков ещё не было" in capsys.readouterr().out

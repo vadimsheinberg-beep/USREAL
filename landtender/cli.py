@@ -65,6 +65,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("stats", help="показать состояние базы и последний запуск")
 
+    tg_cmd = sub.add_parser(
+        "telegram-test", help="проверить подключение к Telegram и отправить пробное сообщение"
+    )
+    tg_cmd.add_argument(
+        "--discover", action="store_true",
+        help="показать chat_id всех чатов, где боту приходили сообщения",
+    )
+    tg_cmd.add_argument("--no-send", action="store_true", help="только проверки, без пробного сообщения")
+
     return parser
 
 
@@ -134,6 +143,70 @@ def cmd_export(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_telegram_test(args: argparse.Namespace) -> int:
+    """Пошагово проверяет цепочку токен → канал → отправка."""
+    from .notify import TelegramError, TelegramNotifier
+
+    config = load_config(args.config)
+    token = config.get("telegram", "bot_token")
+    chat_id = config.get("telegram", "chat_id")
+
+    if not token:
+        print("✗ Токен не найден. Задайте TELEGRAM_BOT_TOKEN в окружении или в файле .env")
+        return 2
+
+    if args.discover:
+        # Для поиска chat_id канал ещё не нужен — подставляем заглушку.
+        notifier = TelegramNotifier(bot_token=token, chat_id=chat_id or "0")
+        try:
+            chats = notifier.discover_chats()
+        except TelegramError as exc:
+            print(f"✗ getUpdates: {exc}")
+            return 1
+        if not chats:
+            print(
+                "Чатов не найдено. Добавьте бота администратором канала, напишите "
+                "туда любое сообщение и повторите команду."
+            )
+            return 1
+        print("Найденные чаты (скопируйте нужный chat_id в TELEGRAM_CHAT_ID):")
+        for chat in chats:
+            print(f"  {chat['chat_id']:<16} {chat['type']:<10} {chat['title'] or ''}")
+        return 0
+
+    if not chat_id:
+        print("✗ Не задан TELEGRAM_CHAT_ID. Найти его поможет: landtender telegram-test --discover")
+        return 2
+
+    notifier = TelegramNotifier(bot_token=token, chat_id=chat_id)
+
+    try:
+        me = notifier.get_me()
+        print(f"✓ Токен принят: @{me.get('username')} ({me.get('first_name')})")
+    except TelegramError as exc:
+        print(f"✗ Токен отклонён: {exc}")
+        return 1
+
+    try:
+        chat = notifier.get_chat()
+        print(f"✓ Канал доступен: {chat.get('title') or chat.get('username')} (id {chat.get('id')})")
+    except TelegramError as exc:
+        print(f"✗ Канал недоступен: {exc}")
+        print("  Проверьте, что бот добавлен в канал администратором и chat_id указан верно.")
+        return 1
+
+    if args.no_send:
+        return 0
+
+    try:
+        notifier.send_blocks(["<b>landtender</b>\nПробное сообщение — канал подключён."])
+        print("✓ Пробное сообщение отправлено")
+    except TelegramError as exc:
+        print(f"✗ Отправка не прошла: {exc}")
+        return 1
+    return 0
+
+
 def cmd_stats(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     with open_storage(config, args.db) as storage:
@@ -173,6 +246,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_export(args)
     if command == "stats":
         return cmd_stats(args)
+    if command == "telegram-test":
+        return cmd_telegram_test(args)
 
     parser.print_help()
     return 2

@@ -61,9 +61,13 @@ property_types = [39]
 
 [telegram]
 enabled = true
+# Значения берутся из окружения или из файла .env рядом с конфигом.
+# Проверить подключение: landtender telegram-test
 bot_token = "env:TELEGRAM_BOT_TOKEN"
 chat_id = "env:TELEGRAM_CHAT_ID"
 # false — присылать только лоты дороже порога.
 send_standard_tier = true
 max_lots_per_tier = 25
 notify_changes = true
+# Прикладывать к сводке CSV со всеми новыми лотами отдельным файлом.
+attach_csv = true
