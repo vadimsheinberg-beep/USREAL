@@ -104,6 +104,18 @@ class TestDiagnostics:
         assert notifier.get_chat()["title"] == "Земля"
         assert captured["chat_id"] == "-1001"
 
+    def test_public_channel_username_is_passed_through_unchanged(self, monkeypatch):
+        """Telegram принимает @имя вместо числового id — не ломаем его."""
+        captured = {}
+
+        def fake_post(url, json=None, **kwargs):
+            captured.update(json or {})
+            return FakeResponse({"ok": True, "result": {"id": -1001, "title": "Земля"}})
+
+        monkeypatch.setattr("requests.post", fake_post)
+        TelegramNotifier(bot_token="123:AA", chat_id="@my_land_channel").get_chat()
+        assert captured["chat_id"] == "@my_land_channel"
+
     def test_discover_collects_channels_and_groups(self, notifier, monkeypatch):
         updates = {
             "ok": True,
