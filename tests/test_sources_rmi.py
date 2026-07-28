@@ -40,7 +40,7 @@ class TestFetch:
 
     def test_reads_price_units_and_area(self):
         lots = {lot.source_id: lot for lot in make_source(ROUTES).fetch()}
-        lot = lots["20250142:10769/42"]
+        lot = lots["20250142:10769/42/1"]
         assert lot.price_nis == 18_500_000.0
         assert lot.price_kind == "min"
         assert lot.units == 60
@@ -49,12 +49,12 @@ class TestFetch:
 
     def test_final_price_wins_when_tender_has_results(self):
         lots = {lot.source_id: lot for lot in make_source(ROUTES).fetch()}
-        lot = lots["20250142:10769/43"]
+        lot = lots["20250142:10769/43/2"]
         assert (lot.price_nis, lot.price_kind) == (3_610_000.0, "final")
 
     def test_inherits_tender_level_geography(self):
         lots = {lot.source_id: lot for lot in make_source(ROUTES).fetch()}
-        lot = lots["20250142:10769/42"]
+        lot = lots["20250142:10769/42/1"]
         assert lot.settlement == "חיפה"
         assert lot.neighborhood == "נווה שאנן"
         assert lot.closing_date == "2026-09-15"
@@ -67,7 +67,7 @@ class TestFetch:
 
     def test_infers_single_unit_for_private_house_plot(self):
         lots = {lot.source_id: lot for lot in make_source(ROUTES).fetch()}
-        lot = lots["20250143:5599/18"]
+        lot = lots["20250143:5599/18/1"]
         assert lot.units == 1
         assert lot.units_basis == "inferred"
 
@@ -84,6 +84,58 @@ class TestFetch:
     def test_documents_are_not_mistaken_for_lots(self):
         lots = list(make_source(ROUTES).fetch())
         assert all("חוברת" not in (lot.tender_name or "") for lot in lots)
+
+
+class TestDeduplication:
+    """Портал повторяет один и тот же участок на разных уровнях вложенности."""
+
+    def test_same_plot_repeated_in_nested_nodes_yields_one_lot(self):
+        plot = {"Gush": "555", "Chelka": "1", "Area": 900.0, "MinPrice": 1_000_000.0}
+        details = {
+            "MichrazID": 20250142,
+            "Tik": {"Migrashim": [plot]},
+            "Summary": {"Migrashim": [dict(plot)]},
+            "Nested": {"Deeper": {"Plot": dict(plot)}},
+        }
+        routes = dict(ROUTES, **{"MichrazDetailsApi/Get": details})
+        lots = [lot for lot in make_source(routes).fetch() if lot.tender_id == "20250142"]
+        assert len(lots) == 1
+
+    def test_identical_plots_without_gush_are_collapsed(self):
+        plot = {"Area": 500.0, "YechidotDiur": 45, "MinPrice": 800_000.0}
+        details = {"MichrazID": 20250142, "A": [dict(plot)], "B": [dict(plot)], "C": [dict(plot)]}
+        routes = dict(ROUTES, **{"MichrazDetailsApi/Get": details})
+        lots = [lot for lot in make_source(routes).fetch() if lot.tender_id == "20250142"]
+        assert len(lots) == 1
+
+    def test_genuinely_different_plots_are_kept_apart(self):
+        details = {
+            "MichrazID": 20250142,
+            "Migrashim": [
+                {"Area": 500.0, "YechidotDiur": 45, "MinPrice": 800_000.0},
+                {"Area": 700.0, "YechidotDiur": 45, "MinPrice": 800_000.0},
+                {"Area": 500.0, "YechidotDiur": 45, "MinPrice": 900_000.0},
+            ],
+        }
+        routes = dict(ROUTES, **{"MichrazDetailsApi/Get": details})
+        lots = [lot for lot in make_source(routes).fetch() if lot.tender_id == "20250142"]
+        assert len(lots) == 3
+
+    def test_same_gush_different_migrash_are_separate(self):
+        details = {
+            "MichrazID": 20250142,
+            "Migrashim": [
+                {"Gush": "555", "Chelka": "1", "MigrashNumber": "1", "MinPrice": 1_000_000.0},
+                {"Gush": "555", "Chelka": "1", "MigrashNumber": "2", "MinPrice": 1_200_000.0},
+            ],
+        }
+        routes = dict(ROUTES, **{"MichrazDetailsApi/Get": details})
+        lots = [lot for lot in make_source(routes).fetch() if lot.tender_id == "20250142"]
+        assert len(lots) == 2
+
+    def test_real_tender_still_expands_to_all_its_plots(self):
+        lots = [lot for lot in make_source(ROUTES).fetch() if lot.tender_id == "20250142"]
+        assert len(lots) == 3
 
 
 class TestResilience:

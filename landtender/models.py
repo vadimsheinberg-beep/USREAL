@@ -127,6 +127,8 @@ class SourceReport:
     error: str | None = None
     duration_sec: float = 0.0
     note: str | None = None
+    #: Сколько лотов отброшено как просроченные (срок подачи прошёл).
+    skipped_expired: int = 0
 
 
 @dataclass

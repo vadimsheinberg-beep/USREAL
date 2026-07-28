@@ -187,7 +187,11 @@ def build_console_report(result: RunResult, threshold_usd: float) -> str:
     for source in result.sources:
         status = "ok " if source.ok else "ERR"
         note = f" — {source.error}" if source.error else ""
-        lines.append(f"  [{status}] {source.name:<16} лотов: {source.lots:<5} {source.duration_sec:.1f}с{note}")
+        expired = f" (просрочено: {source.skipped_expired})" if source.skipped_expired else ""
+        lines.append(
+            f"  [{status}] {source.name:<16} лотов: {source.lots:<5} "
+            f"{source.duration_sec:.1f}с{expired}{note}"
+        )
 
     lines += ["", f"Всего записей: {stats['total_seen']}, новых: {stats['new']}, изменилось: {stats['changed']}", ""]
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import tempfile
 import time
+from datetime import date
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -16,6 +17,9 @@ from .sources import SOURCES_BY_NAME, Source, SourceContext
 from .storage import Storage
 
 log = logging.getLogger(__name__)
+
+#: Статусы рм"י, означающие, что подавать заявку уже нельзя.
+CLOSED_STATUSES = {"סגור", "בוטל", "הסתיים"}
 
 
 def build_http(config: Config) -> HttpClient:
@@ -79,6 +83,8 @@ def run_once(
     threshold = config.threshold_usd
     include_dev = bool(config.get("valuation", "include_development_costs", False))
     keep_priceless = bool(config.get("valuation", "keep_priceless", True))
+    hide_expired = bool(config.get("general", "hide_expired", True))
+    today = date.today().isoformat()
 
     result = RunResult(
         started_at=started_at,
@@ -95,6 +101,9 @@ def run_once(
         try:
             source = build_source(name, config, http, storage, full_refresh)
             for lot in source.fetch():
+                if hide_expired and is_expired(lot, today):
+                    report.skipped_expired += 1
+                    continue
                 enrich_lot(lot, fx, threshold, include_dev)
                 if lot.price_usd is None and not keep_priceless:
                     continue
@@ -189,6 +198,19 @@ def notify(config: Config, storage: Storage, result: RunResult, dry_run: bool = 
         storage.mark_notified(f"{lot.uid}:{lot.content_hash()[:12]}", "changed", now)
     storage.commit()
     return sent
+
+
+def is_expired(lot: Lot, today: str) -> bool:
+    """Лот протух, если срок подачи уже прошёл или тендер закрыт.
+
+    Дата важнее статуса: статус на портале обновляется не сразу, а срок
+    подачи — жёсткий факт.
+    """
+    if lot.closing_date and lot.closing_date < today:
+        return True
+    if lot.status in CLOSED_STATUSES:
+        return True
+    return False
 
 
 def _attach_csv(notifier: Any, lots: list[Lot], day: str) -> None:

@@ -39,6 +39,7 @@ from ..extract import (
     clean_text,
     looks_like_lot,
     pick,
+    UNITS_KEYS,
     to_float,
     to_int,
     to_iso_date,
@@ -261,6 +262,30 @@ def _resolve_lot_units(
     return resolve_units(node, meta.get("tender_name"), purpose)
 
 
+def _lot_key(
+    node: dict[str, Any], gush: str | None, chelka: str | None, prices: dict[str, float | None]
+) -> str:
+    """Устойчивый ключ участка внутри тендера.
+
+    Гуш и хелька однозначно определяют участок, когда они есть. Если их нет,
+    опознаём участок по совокупности его характеристик — два одинаковых
+    набора цифр это один и тот же участок, встреченный дважды.
+    """
+    if gush or chelka:
+        migrash = clean_text(pick(node, ("MigrashNumber", "Migrash", "מגרש")))
+        return f"{gush or ''}/{chelka or ''}/{migrash or ''}"
+
+    parts = [
+        clean_text(pick(node, ("MigrashNumber", "Migrash", "מגרש"))),
+        to_float(pick(node, AREA_KEYS)),
+        to_int(pick(node, UNITS_KEYS)),
+        prices["final"],
+        prices["min"],
+        prices["appraisal"],
+    ]
+    return "|".join("" if part is None else str(part) for part in parts)
+
+
 def _lots_from_details(
     details: Any, meta: dict[str, Any], codes: dict[str, dict[int, str]]
 ) -> Iterable[Lot]:
@@ -270,7 +295,6 @@ def _lots_from_details(
     обходим всё дерево и берём узлы, похожие на участок.
     """
     seen: set[str] = set()
-    index = 0
 
     for node in walk_dicts(details):
         if not looks_like_lot(node):
@@ -284,12 +308,13 @@ def _lots_from_details(
         gush = clean_text(pick(node, GUSH_KEYS))
         chelka = clean_text(pick(node, CHELKA_KEYS))
 
-        # Ключ участка: гуш/хелька, если есть; иначе порядковый номер в тендере.
-        key = f"{gush or ''}/{chelka or ''}" if (gush or chelka) else f"#{index}"
+        # Ключ участка строится по его содержимому, а не по порядку обхода:
+        # портал повторяет одни и те же данные на разных уровнях вложенности,
+        # и порядковый номер превращал каждый повтор в отдельный «участок».
+        key = _lot_key(node, gush, chelka, prices)
         if key in seen:
             continue
         seen.add(key)
-        index += 1
 
         price_nis, price_kind = choose_price(prices, ["final", "min", "appraisal"])
         # Назначение участка точнее общего назначения тендера — берём его первым.

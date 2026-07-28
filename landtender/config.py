@@ -15,6 +15,7 @@ ENV_FILE_NAME = ".env"
 DEFAULTS: dict[str, Any] = {
     "general": {
         "threshold_usd": 1_000_000.0,
+        "hide_expired": True,
         "lookback_days": 30,
         "db_path": "data/landtender.sqlite3",
         "user_agent": "landtender/0.1 (+https://github.com/vadimsheinberg-beep/usreal)",
@@ -36,7 +37,7 @@ DEFAULTS: dict[str, Any] = {
         "keep_priceless": True,
     },
     "sources": {
-        "rmi_michrazim": {"enabled": True, "details_budget": 400, "active_only": False},
+        "rmi_michrazim": {"enabled": True, "details_budget": 400, "active_only": True},
         "data_gov_il": {"enabled": True, "max_rows": 2000, "queries": ["מכרזי מקרקעין", "מכרזים רשות מקרקעי ישראל"]},
         "gov_mr": {"enabled": True, "max_pages": 5},
         "yad2": {"enabled": True, "max_pages": 5, "property_types": [39]},

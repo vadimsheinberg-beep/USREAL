@@ -129,6 +129,46 @@ class TestRunOnce:
             pipeline.run_once(make_config(), storage, only_sources=["нет-такого"])
 
 
+class TestExpiredFilter:
+    def test_lot_with_past_closing_date_is_expired(self):
+        assert pipeline.is_expired(lot(closing_date="2026-07-26"), "2026-07-27") is True
+
+    def test_lot_closing_today_is_still_current(self):
+        assert pipeline.is_expired(lot(closing_date="2026-07-27"), "2026-07-27") is False
+
+    def test_future_closing_date_is_current(self):
+        assert pipeline.is_expired(lot(closing_date="2026-09-15"), "2026-07-27") is False
+
+    def test_closed_status_is_expired_even_without_date(self):
+        assert pipeline.is_expired(lot(status="סגור"), "2026-07-27") is True
+        assert pipeline.is_expired(lot(status="בוטל"), "2026-07-27") is True
+
+    def test_open_status_is_current(self):
+        assert pipeline.is_expired(lot(status="פתוח"), "2026-07-27") is False
+
+    def test_lot_without_dates_is_kept(self):
+        assert pipeline.is_expired(lot(), "2026-07-27") is False
+
+    def test_expired_lots_are_dropped_from_the_run(self, storage):
+        FakeSource.batches = [[
+            lot(source_id="старый", closing_date="2020-01-01"),
+            lot(source_id="актуальный", closing_date="2099-01-01"),
+        ]]
+        result = pipeline.run_once(make_config(), storage, only_sources=["fake"])
+
+        assert [l.source_id for l in result.new_lots] == ["актуальный"]
+        assert result.sources[0].skipped_expired == 1
+
+    def test_filter_can_be_switched_off(self, storage):
+        FakeSource.batches = [[lot(source_id="старый", closing_date="2020-01-01")]]
+        config = make_config()
+        config.data["general"]["hide_expired"] = False
+        result = pipeline.run_once(config, storage, only_sources=["fake"])
+
+        assert len(result.new_lots) == 1
+        assert result.sources[0].skipped_expired == 0
+
+
 class TestSelectSources:
     def test_uses_enabled_sources_from_config(self):
         assert set(pipeline.select_sources(make_config())) == {"fake", "broken"}
