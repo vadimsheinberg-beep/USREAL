@@ -44,7 +44,7 @@ class TestLoading:
     def test_untouched_defaults_survive_merge(self, tmp_path):
         config = load_config(write_config(tmp_path))
         assert config.get("general", "lookback_days") == 30
-        assert config.source_config("rmi_michrazim")["details_budget"] == 400
+        assert config.source_config("rmi_michrazim")["details_budget"] == 500
 
     def test_source_can_be_disabled(self, tmp_path):
         config = load_config(write_config(tmp_path))

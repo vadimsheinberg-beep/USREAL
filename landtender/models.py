@@ -131,6 +131,8 @@ class SourceReport:
     note: str | None = None
     #: Сколько лотов отброшено как просроченные (срок подачи прошёл).
     skipped_expired: int = 0
+    #: Сколько лотов отброшено как относящиеся к другим городам.
+    skipped_elsewhere: int = 0
 
 
 @dataclass

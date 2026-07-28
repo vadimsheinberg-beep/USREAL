@@ -48,6 +48,9 @@ from ..extract import (
 )
 from ..http import HttpError
 from ..models import UNITS_REPORTED, Lot
+from ..places import code_for as code_for_place
+from ..places import matches as place_matches
+from ..places import resolve as resolve_places
 from ..money import choose_price
 from ..units import resolve_units, units_from_record
 from .base import Source
@@ -111,6 +114,29 @@ class RmiMichrazimSource(Source):
         tenders = self._search()
         log.info("рм\"י: тендеров в выдаче — %d", len(tenders))
 
+        # Город портал отдаёт кодом, а не текстом. Отбираем по коду до загрузки
+        # деталей — иначе лимит уходит на тендеры, которые всё равно не нужны.
+        wanted = self.ctx.option("settlements") or []
+        city_by_tender: dict[str, str] = {}
+        if wanted:
+            names, codes = resolve_places(list(wanted))
+            code_names = {code_for_place(name): name for name in names if code_for_place(name)}
+            before = len(tenders)
+            kept = []
+            for tender in tenders:
+                city = _settlement_of(tender, names, code_names)
+                if city is None:
+                    continue
+                kept.append(tender)
+                tender_id = pick(tender, ("MichrazID", "MichrazId"))
+                if tender_id is not None:
+                    city_by_tender[str(to_int(tender_id))] = city
+            tenders = kept
+            log.info(
+                'рм"י: отобрано по городам (%s) — %d из %d',
+                ", ".join(names), len(tenders), before,
+            )
+
         budget = int(self.ctx.option("details_budget", 400))
         codes = self._codes()
         fetched_details = 0
@@ -120,6 +146,9 @@ class RmiMichrazimSource(Source):
             tender_id = meta.get("tender_id")
             if not tender_id:
                 continue
+            # Название города известно из отбора — портал текстом его не даёт
+            if not meta.get("settlement") and tender_id in city_by_tender:
+                meta["settlement"] = city_by_tender[tender_id]
 
             fingerprint = _fingerprint(tender)
             needs_details = True
@@ -264,6 +293,43 @@ def _resolve_lot_units(
     return resolve_units(node, meta.get("tender_name"), purpose)
 
 
+def _settlement_of(
+    tender: dict[str, Any], names: list[str], code_names: dict[int, str]
+) -> str | None:
+    """Название нужного города для тендера, либо ``None``, если город не тот.
+
+    Код надёжнее названия: город портал отдаёт числом ``KodYeshuv``, а текстом
+    показывает квартал. Если код не пришёл, пробуем узнать город по тексту —
+    иначе тендер потеряется только из-за пропущенного поля.
+    """
+    code = to_int(pick(tender, ("KodYeshuv", "KodYishuv")))
+    if code is not None:
+        return code_names.get(code)
+
+    for keys in (SETTLEMENT_KEYS, NEIGHBORHOOD_KEYS, TENDER_NAME_KEYS):
+        text = clean_text(pick(tender, keys))
+        for name in names:
+            if place_matches(text, [name]):
+                return name
+    return None
+
+
+def _plot_nodes(details: Any) -> Iterable[dict[str, Any]]:
+    """Узлы-участки внутри ответа деталей.
+
+    Участки лежат в массиве ``Tik``. Обход всего дерева оставлен запасным
+    путём: портал повторяет те же данные в других ветках, и от этого каждый
+    участок попадал в выдачу дважды.
+    """
+    if isinstance(details, dict):
+        tik = details.get("Tik")
+        if isinstance(tik, list):
+            nodes = [item for item in tik if isinstance(item, dict) and looks_like_lot(item)]
+            if nodes:
+                return nodes
+    return [node for node in walk_dicts(details) if looks_like_lot(node)]
+
+
 def _migrash_name(node: dict[str, Any]) -> str | None:
     """Номер участка: у рм"י это ``TikID`` либо ``MigrashName`` внутри плана."""
     direct = clean_text(pick(node, ("TikID", "MitchamName", "MigrashNumber", "Migrash", "מגרש")))
@@ -330,10 +396,7 @@ def _lots_from_details(
     """
     seen: set[str] = set()
 
-    for node in walk_dicts(details):
-        if not looks_like_lot(node):
-            continue
-
+    for node in _plot_nodes(details):
         prices = {
             "final": to_float(pick(node, PRICE_FINAL_KEYS)),
             "min": to_float(pick(node, PRICE_MIN_KEYS)),

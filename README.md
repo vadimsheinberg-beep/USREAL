@@ -202,6 +202,8 @@ systemctl enable --now landtender.timer
 ```toml
 [general]
 threshold_usd = 1_000_000     # порог деления на группы
+settlements = ["ירושלים", "נתניה"]   # города; [] — без ограничения
+hide_expired = true           # прятать тендеры с истёкшим сроком подачи
 rate_limit_delay = 1.0        # пауза между запросами; ниже 0.5 порталы дают 429
 
 [valuation]

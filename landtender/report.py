@@ -196,7 +196,12 @@ def build_console_report(result: RunResult, threshold_usd: float) -> str:
     for source in result.sources:
         status = "ok " if source.ok else "ERR"
         note = f" — {source.error}" if source.error else ""
-        expired = f" (просрочено: {source.skipped_expired})" if source.skipped_expired else ""
+        dropped = []
+        if source.skipped_expired:
+            dropped.append(f"просрочено: {source.skipped_expired}")
+        if source.skipped_elsewhere:
+            dropped.append(f"другие города: {source.skipped_elsewhere}")
+        expired = f" ({', '.join(dropped)})" if dropped else ""
         lines.append(
             f"  [{status}] {source.name:<16} лотов: {source.lots:<5} "
             f"{source.duration_sec:.1f}с{expired}{note}"

@@ -149,6 +149,51 @@ class TestRealPortalSchema:
         assert lot.guarantee_nis == pytest.approx(lot.price_nis * 0.1, rel=0.01)
 
 
+class TestSettlementFilter:
+    """Город портал отдаёт кодом ЦСБ, а текстом показывает только квартал."""
+
+    SEARCH = [
+        {"MichrazID": 1, "KodYeshuv": 3000, "Shchuna": "פסגת זאב"},   # Иерусалим
+        {"MichrazID": 2, "KodYeshuv": 7400, "Shchuna": "קרית השרון"},  # Нетания
+        {"MichrazID": 3, "KodYeshuv": 4000, "Shchuna": "נווה שאנן"},   # Хайфа
+    ]
+
+    def source(self, settlements):
+        routes = {"SearchApi/Search": self.SEARCH, "MichrazDetailsApi/Get": {}}
+        return make_source(routes, options={"settlements": settlements})
+
+    def test_keeps_only_requested_cities(self):
+        lots = list(self.source(["ירושלים", "נתניה"]).fetch())
+        assert {lot.tender_id for lot in lots} == {"1", "2"}
+
+    def test_city_name_is_filled_in_from_the_code(self):
+        """Портал названия не даёт — подставляем то, по которому отобрали."""
+        lots = {lot.tender_id: lot for lot in self.source(["ירושלים", "נתניה"]).fetch()}
+        assert lots["1"].settlement == "ירושלים"
+        assert lots["2"].settlement == "נתניה"
+
+    def test_russian_spelling_works(self):
+        lots = list(self.source(["Иерусалим"]).fetch())
+        assert {lot.tender_id for lot in lots} == {"1"}
+
+    def test_empty_list_disables_the_filter(self):
+        assert len(list(self.source([]).fetch())) == 3
+
+    def test_details_are_not_fetched_for_other_cities(self):
+        source = self.source(["ירושלים"])
+        list(source.fetch())
+        detail_calls = [c for c in source.ctx.http.calls if "MichrazDetailsApi" in c[1]]
+        assert len(detail_calls) == 1
+
+    def test_tender_without_code_falls_back_to_text(self):
+        routes = {
+            "SearchApi/Search": [{"MichrazID": 9, "Shchuna": "מרכז ירושלים"}],
+            "MichrazDetailsApi/Get": {},
+        }
+        source = make_source(routes, options={"settlements": ["ירושלים"]})
+        assert [lot.tender_id for lot in source.fetch()] == ["9"]
+
+
 class TestDeduplication:
     """Портал повторяет один и тот же участок на разных уровнях вложенности."""
 
@@ -199,6 +244,30 @@ class TestDeduplication:
     def test_real_tender_still_expands_to_all_its_plots(self):
         lots = [lot for lot in make_source(ROUTES).fetch() if lot.tender_id == "20250142"]
         assert len(lots) == 3
+
+    def test_plots_come_from_tik_only_when_it_is_present(self):
+        """Живой запуск удваивал каждый участок: те же данные лежат в дереве
+        не только в ``Tik``, а обход брал все копии."""
+        plot = {"TikID": "A", "Shetach": 900, "MechirSaf": 5_000_000}
+        details = {
+            "MichrazID": 20250142,
+            "Tik": [plot],
+            "Echo": {"Tik": [{"TikID": "B", "Shetach": 900, "MechirSaf": 5_000_000}]},
+            "Mirror": {"Plot": {"TikID": "C", "Shetach": 900, "MechirSaf": 5_000_000}},
+        }
+        routes = dict(ROUTES, **{"MichrazDetailsApi/Get": details})
+        lots = [lot for lot in make_source(routes).fetch() if lot.tender_id == "20250142"]
+        assert len(lots) == 1
+
+    def test_tree_walk_is_still_used_when_tik_is_absent(self):
+        details = {
+            "MichrazID": 20250142,
+            "Migrashim": [{"TikID": "A", "Shetach": 900, "MechirSaf": 5_000_000}],
+        }
+        routes = dict(ROUTES, **{"MichrazDetailsApi/Get": details})
+        lots = [lot for lot in make_source(routes).fetch() if lot.tender_id == "20250142"]
+        assert len(lots) == 1
+        assert lots[0].price_nis == 5_000_000
 
 
 class TestResilience:

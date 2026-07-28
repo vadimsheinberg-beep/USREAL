@@ -13,6 +13,7 @@ from .config import Config
 from .http import HttpClient
 from .models import Lot, RunResult, SourceReport
 from .money import FxProvider, FxRate, enrich_lot, utcnow_iso
+from .places import matches as place_matches
 from .sources import SOURCES_BY_NAME, Source, SourceContext
 from .storage import Storage
 
@@ -84,6 +85,7 @@ def run_once(
     include_dev = bool(config.get("valuation", "include_development_costs", False))
     keep_priceless = bool(config.get("valuation", "keep_priceless", True))
     hide_expired = bool(config.get("general", "hide_expired", True))
+    settlements = list(config.get("general", "settlements", []) or [])
     today = date.today().isoformat()
 
     result = RunResult(
@@ -101,6 +103,9 @@ def run_once(
         try:
             source = build_source(name, config, http, storage, full_refresh)
             for lot in source.fetch():
+                if not in_settlements(lot, settlements):
+                    report.skipped_elsewhere += 1
+                    continue
                 if hide_expired and is_expired(lot, today):
                     report.skipped_expired += 1
                     continue
@@ -198,6 +203,21 @@ def notify(config: Config, storage: Storage, result: RunResult, dry_run: bool = 
         storage.mark_notified(f"{lot.uid}:{lot.content_hash()[:12]}", "changed", now)
     storage.commit()
     return sent
+
+
+def in_settlements(lot: Lot, wanted: list[str]) -> bool:
+    """Относится ли лот к одному из нужных городов.
+
+    Пустой список означает «города не ограничены». Лот без указания места
+    отбрасывается: попадёт он в нужный город или нет — неизвестно, а гадать
+    в пользу включения значит засорять сводку.
+    """
+    if not wanted:
+        return True
+    return any(
+        place_matches(text, wanted)
+        for text in (lot.settlement, lot.neighborhood, lot.region, lot.tender_name)
+    )
 
 
 def is_expired(lot: Lot, today: str) -> bool:
