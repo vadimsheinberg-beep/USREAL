@@ -23,6 +23,7 @@ from ..extract import (
     CLOSING_KEYS,
     COMMITTEE_KEYS,
     DEVELOPMENT_KEYS,
+    GUARANTEE_KEYS,
     GUSH_KEYS,
     NEIGHBORHOOD_KEYS,
     PRICE_APPRAISAL_KEYS,
@@ -217,7 +218,8 @@ def _tender_meta(tender: dict[str, Any], codes: dict[str, dict[int, str]]) -> di
         "published_date": to_iso_date(pick(tender, PUBLISHED_KEYS)),
         "closing_date": to_iso_date(pick(tender, CLOSING_KEYS)),
         "committee_date": to_iso_date(pick(tender, COMMITTEE_KEYS)),
-        "units": to_int(pick(tender, ("YechidotDiur", "YechidotDiyur"))),
+        "units": to_int(pick(tender, ("YechidotDiur", "YechidotDiyur", "Kibolet"))),
+        "guarantee_nis": to_float(pick(tender, GUARANTEE_KEYS)),
         "url": f"{BASE_URL}/#/michraz/{tender_id}" if tender_id else BASE_URL,
     }
 
@@ -262,6 +264,39 @@ def _resolve_lot_units(
     return resolve_units(node, meta.get("tender_name"), purpose)
 
 
+def _migrash_name(node: dict[str, Any]) -> str | None:
+    """Номер участка: у рм"י это ``TikID`` либо ``MigrashName`` внутри плана."""
+    direct = clean_text(pick(node, ("TikID", "MitchamName", "MigrashNumber", "Migrash", "מגרש")))
+    if direct:
+        return direct
+    plans = node.get("TochnitMigrash")
+    if isinstance(plans, list):
+        for plan in plans:
+            if isinstance(plan, dict):
+                name = clean_text(pick(plan, ("MigrashName", "MigrashNumber")))
+                if name:
+                    return name
+    return None
+
+
+def _gush_chelka(node: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Гуш и хелька участка.
+
+    Портал кладёт их в массив ``GushHelka`` — участок может лежать сразу на
+    нескольких кадастровых единицах. Берём первую; остальные видны в raw.
+    """
+    entries = node.get("GushHelka")
+    if isinstance(entries, list):
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            gush = clean_text(pick(entry, GUSH_KEYS))
+            chelka = clean_text(pick(entry, CHELKA_KEYS))
+            if gush or chelka:
+                return gush, chelka
+    return clean_text(pick(node, GUSH_KEYS)), clean_text(pick(node, CHELKA_KEYS))
+
+
 def _lot_key(
     node: dict[str, Any], gush: str | None, chelka: str | None, prices: dict[str, float | None]
 ) -> str:
@@ -272,11 +307,10 @@ def _lot_key(
     набора цифр это один и тот же участок, встреченный дважды.
     """
     if gush or chelka:
-        migrash = clean_text(pick(node, ("MigrashNumber", "Migrash", "מגרש")))
-        return f"{gush or ''}/{chelka or ''}/{migrash or ''}"
+        return f"{gush or ''}/{chelka or ''}/{_migrash_name(node) or ''}"
 
     parts = [
-        clean_text(pick(node, ("MigrashNumber", "Migrash", "מגרש"))),
+        _migrash_name(node),
         to_float(pick(node, AREA_KEYS)),
         to_int(pick(node, UNITS_KEYS)),
         prices["final"],
@@ -305,8 +339,7 @@ def _lots_from_details(
             "min": to_float(pick(node, PRICE_MIN_KEYS)),
             "appraisal": to_float(pick(node, PRICE_APPRAISAL_KEYS)),
         }
-        gush = clean_text(pick(node, GUSH_KEYS))
-        chelka = clean_text(pick(node, CHELKA_KEYS))
+        gush, chelka = _gush_chelka(node)
 
         # Ключ участка строится по его содержимому, а не по порядку обхода:
         # портал повторяет одни и те же данные на разных уровнях вложенности,
@@ -341,6 +374,7 @@ def _lots_from_details(
             price_nis=price_nis,
             price_kind=price_kind,
             development_costs_nis=to_float(pick(node, DEVELOPMENT_KEYS)),
+            guarantee_nis=to_float(pick(node, GUARANTEE_KEYS)) or meta.get("guarantee_nis"),
             published_date=meta["published_date"],
             closing_date=meta["closing_date"],
             committee_date=meta["committee_date"],

@@ -70,6 +70,15 @@ def _lot_line_html(lot: Lot) -> str:
         detail.append(f"за единицу {fmt_usd(lot.price_per_unit_usd)}")
     parts.append("  " + " · ".join(detail))
 
+    # Что нужно иметь на руках сверх цены земли: развитие и банковская гарантия
+    extra = []
+    if lot.development_costs_nis:
+        extra.append(f"развитие {fmt_nis(lot.development_costs_nis)}")
+    if lot.guarantee_nis:
+        extra.append(f"ערבות {fmt_nis(lot.guarantee_nis)}")
+    if extra:
+        parts.append("  🏦 " + " · ".join(extra))
+
     tail = []
     if lot.purpose:
         tail.append(escape(lot.purpose))
@@ -215,7 +224,7 @@ def build_console_report(result: RunResult, threshold_usd: float) -> str:
 EXPORT_FIELDS = (
     "uid", "source", "tender_id", "tender_name", "settlement", "neighborhood",
     "gush", "chelka", "purpose", "status", "area_sqm", "units", "units_basis",
-    "price_nis", "price_kind", "price_usd", "price_per_unit_usd", "price_per_sqm_usd",
+    "price_nis", "price_kind", "development_costs_nis", "guarantee_nis", "price_usd", "price_per_unit_usd", "price_per_sqm_usd",
     "tier", "published_date", "closing_date", "url",
 )
 

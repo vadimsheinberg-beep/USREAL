@@ -38,8 +38,8 @@ jobs:
           # v2 — база пересоздана: сменился формат ключа участка и включён
           # отбор только действующих тендеров. Старый кеш подхватывать нельзя,
           # иначе в сводку попадут записи со старыми идентификаторами.
-          key: landtender-db-v2-${{ github.run_id }}
-          restore-keys: landtender-db-v2-
+          key: landtender-db-v3-${{ github.run_id }}
+          restore-keys: landtender-db-v3-
 
       - name: Собрать конфиг
         run: cp landtender.example.toml landtender.toml

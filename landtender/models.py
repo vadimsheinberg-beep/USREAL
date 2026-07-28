@@ -59,6 +59,8 @@ class Lot:
     price_nis: float | None = None
     price_kind: str | None = None
     development_costs_nis: float | None = None
+    #: Банковская гарантия, которую требует тендер (не менее 10% от заявки).
+    guarantee_nis: float | None = None
 
     # Деньги (пересчёт в доллары — заполняет money.py)
     price_usd: float | None = None

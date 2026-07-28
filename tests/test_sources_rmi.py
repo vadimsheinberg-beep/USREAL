@@ -86,6 +86,69 @@ class TestFetch:
         assert all("חוברת" not in (lot.tender_name or "") for lot in lots)
 
 
+class TestRealPortalSchema:
+    """Схема снята с живого ответа портала командой ``landtender inspect``.
+
+    Имена полей у рм"י — транслитерация с иврита, и ни одно из них не
+    совпало с тем, что предполагалось изначально.
+    """
+
+    ROUTES = {
+        "SearchApi/Search": [{"MichrazID": 20260123, "MichrazName": "חי/123/2026", "StatusMichraz": 1}],
+        "MichrazDetailsApi/Get": load_fixture("rmi_details_real_schema.json"),
+    }
+
+    def lots(self):
+        return {lot.source_id: lot for lot in make_source(self.ROUTES).fetch()}
+
+    def test_tik_array_expands_into_plots(self):
+        assert len(self.lots()) == 2
+
+    def test_mechir_saf_is_the_minimum_price(self):
+        lot = self.lots()["20260123:10769/42/70113195א"]
+        assert lot.price_nis == 18_500_000.0
+        assert lot.price_kind == "min"
+
+    def test_schum_zchiya_wins_when_tender_has_a_winner(self):
+        lot = self.lots()["20260123:10769/43/70113196ב"]
+        assert (lot.price_nis, lot.price_kind) == (3_610_000.0, "final")
+
+    def test_mechir_shuma_is_the_appraisal(self):
+        routes = dict(self.ROUTES)
+        routes["MichrazDetailsApi/Get"] = {
+            "MichrazID": 20260123,
+            "Tik": [{"TikID": "1", "Shetach": 500, "mechirShuma": 4_000_000}],
+        }
+        lot = next(iter(make_source(routes).fetch()))
+        assert (lot.price_nis, lot.price_kind) == (4_000_000.0, "appraisal")
+
+    def test_hotzaot_pituach_is_development_cost(self):
+        assert self.lots()["20260123:10769/42/70113195א"].development_costs_nis == 3_400_000.0
+
+    def test_schum_arvut_is_the_bank_guarantee(self):
+        assert self.lots()["20260123:10769/42/70113195א"].guarantee_nis == 1_850_000.0
+
+    def test_kibolet_is_the_unit_count(self):
+        lot = self.lots()["20260123:10769/42/70113195א"]
+        assert lot.units == 60
+        assert lot.units_basis == "reported"
+
+    def test_shetach_is_the_area(self):
+        assert self.lots()["20260123:10769/42/70113195א"].area_sqm == 4200.0
+
+    def test_gush_helka_array_is_unpacked(self):
+        lot = self.lots()["20260123:10769/42/70113195א"]
+        assert (lot.gush, lot.chelka) == ("10769", "42")
+
+    def test_documents_are_not_turned_into_plots(self):
+        assert all("חוברת" not in (lot.tender_name or "") for lot in self.lots().values())
+
+    def test_guarantee_is_roughly_ten_percent_of_the_price(self):
+        """Проверка здравого смысла: рм"י требует не менее 10% от заявки."""
+        lot = self.lots()["20260123:10769/42/70113195א"]
+        assert lot.guarantee_nis == pytest.approx(lot.price_nis * 0.1, rel=0.01)
+
+
 class TestDeduplication:
     """Портал повторяет один и тот же участок на разных уровнях вложенности."""
 

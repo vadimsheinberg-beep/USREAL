@@ -155,13 +155,31 @@ def as_list(obj: Any) -> list[Any]:
 
 # --------------------------------------------------- словари синонимов ------
 
-PRICE_FINAL_KEYS = ("FinalPrice", "SchumZchiya", "WinningPrice", "מחיר זוכה", "מחיר סופי")
-PRICE_MIN_KEYS = ("MinPrice", "MechirMinimum", "MinimumPrice", "SchumMinimali", "מחיר מינימום")
-PRICE_APPRAISAL_KEYS = ("ShumaPrice", "Shuma", "AppraisalPrice", "שומה", "מחיר שומה")
+# Имена подтверждены разведкой живого ответа портала (landtender inspect),
+# а не догадками: MechirSaf — «цена порога», mechirShuma — оценка шамая,
+# SchumZchiya — сумма выигрыша, HotzaotPituach — расходы на развитие.
+PRICE_FINAL_KEYS = (
+    "SchumZchiya", "FinalPrice", "WinningPrice", "מחיר זוכה", "מחיר סופי",
+)
+PRICE_MIN_KEYS = (
+    "MechirSaf", "MechirSafMichraz", "MinPrice", "MechirMinimum",
+    "MinimumPrice", "SchumMinimali", "מחיר מינימום",
+)
+PRICE_APPRAISAL_KEYS = (
+    "mechirShuma", "MechirShuma", "ShumaPrice", "Shuma", "AppraisalPrice",
+    "שומה", "מחיר שומה",
+)
 PRICE_ASKING_KEYS = ("price", "Price", "asking_price", "מחיר", "מחיר מבוקש")
-DEVELOPMENT_KEYS = ("DevelopmentCosts", "HotzaotPituach", "פיתוח", "הוצאות פיתוח")
+DEVELOPMENT_KEYS = (
+    "HotzaotPituach", "DevelopmentCosts", "פיתוח", "הוצאות פיתוח",
+)
+#: Банковская гарантия — по условиям рм"י не менее 10% от суммы заявки.
+GUARANTEE_KEYS = ("SchumArvut", "SumArvutSarvan", "Arvut", "ערבות")
+#: Максимальная цена — встречается в тендерах с потолком.
+PRICE_MAX_KEYS = ("MechirMaximum", "MaxPrice", "מחיר מקסימום")
 
 UNITS_KEYS = (
+    "Kibolet",  # вместимость участка в единицах — так это поле зовётся у рм"י
     "YechidotDiur",
     "YechidotDiyur",
     "YehidotDiur",
@@ -174,7 +192,9 @@ UNITS_KEYS = (
     'יח"ד',
 )
 
-AREA_KEYS = ("Area", "Shetach", "AreaSqm", "SizeInMeters", "square_meters", "שטח", 'שטח במ"ר')
+AREA_KEYS = ("Shetach", "Area", "AreaSqm", "SizeInMeters", "square_meters", "שטח", 'שטח במ"ר')
+#: Площадь разрешённой застройки — отдельно от площади участка.
+BUILD_AREA_KEYS = ("ShetachBniya", "BuildArea")
 
 SETTLEMENT_KEYS = ("Yishuv", "Yeshuv", "SettlementName", "ShemYeshuv", "city", "cityName", "יישוב", "ישוב")
 NEIGHBORHOOD_KEYS = ("Shchuna", "Shkhuna", "Neighborhood", "neighborhood", "שכונה")
@@ -207,14 +227,29 @@ LOT_MARKER_KEYS = (
 )
 
 
+#: Поля, без которых узел не является участком: цена, размер, вместимость.
+#: Гуш и хелька в этот набор НЕ входят — портал держит их отдельным списком
+#: ``GushHelka``, и такая запись сама по себе лишь кадастровая ссылка.
+LOT_SUBSTANCE_KEYS = (
+    PRICE_FINAL_KEYS + PRICE_MIN_KEYS + PRICE_APPRAISAL_KEYS + PRICE_MAX_KEYS
+    + UNITS_KEYS + AREA_KEYS + BUILD_AREA_KEYS + DEVELOPMENT_KEYS
+)
+
+
 def looks_like_lot(mapping: dict[str, Any]) -> bool:
     """Эвристика: словарь похож на описание участка?
 
-    Требуем хотя бы два непустых «маркерных» поля — одно случайное совпадение
-    (например, служебный ``id``) не должно порождать фантомный лот.
+    Нужны два условия: хотя бы одно содержательное поле (цена, площадь или
+    вместимость) и минимум два маркера всего. Одного случайного совпадения
+    мало, а пары идентификаторов без содержимого — недостаточно.
     """
     if not isinstance(mapping, dict):
         return False
+
+    has_substance = any(pick(mapping, (key,)) is not None for key in LOT_SUBSTANCE_KEYS)
+    if not has_substance:
+        return False
+
     hits = 0
     for key in LOT_MARKER_KEYS:
         if pick(mapping, (key,)) is not None:
