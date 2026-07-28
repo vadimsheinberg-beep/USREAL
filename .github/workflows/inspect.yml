@@ -1,0 +1,51 @@
+name: Разведка API рм"י
+
+# Запускается вручную. Ничего не собирает и никуда не отправляет — только
+# печатает в лог то, что портал отдаёт по конкретным тендерам.
+on:
+  workflow_dispatch:
+    inputs:
+      tender_ids:
+        description: "Номера тендеров через пробел (пусто — первые из поиска)"
+        type: string
+        default: ""
+      limit:
+        description: "Сколько тендеров смотреть"
+        type: string
+        default: "3"
+      all_tenders:
+        description: "Искать среди всех, а не только активных"
+        type: boolean
+        default: false
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -e .
+
+      - name: Собрать конфиг с щадящим темпом запросов
+        run: |
+          cp landtender.example.toml landtender.toml
+          # Портал рвёт соединения при частых запросах — сбавляем темп
+          sed -i 's/^rate_limit_delay = .*/rate_limit_delay = 2.5/' landtender.toml
+          grep rate_limit_delay landtender.toml
+
+      - name: Разведка
+        env:
+          TENDER_IDS: ${{ github.event.inputs.tender_ids }}
+          LIMIT: ${{ github.event.inputs.limit }}
+          ALL_TENDERS: ${{ github.event.inputs.all_tenders }}
+        run: |
+          flags=""
+          [ "$ALL_TENDERS" = "true" ] && flags="--all"
+          landtender inspect $TENDER_IDS --limit "${LIMIT:-3}" $flags

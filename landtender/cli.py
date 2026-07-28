@@ -65,6 +65,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("stats", help="показать состояние базы и последний запуск")
 
+    inspect_cmd = sub.add_parser(
+        "inspect", help="разведка: что портал рм\"י реально отдаёт по тендеру"
+    )
+    inspect_cmd.add_argument("tender_ids", nargs="*", help="номера тендеров; по умолчанию первые из поиска")
+    inspect_cmd.add_argument("--limit", type=int, default=3, help="сколько тендеров смотреть")
+    inspect_cmd.add_argument("--all", action="store_true", help="искать среди всех, а не только активных")
+
     setup_cmd = sub.add_parser(
         "setup", help="мастер настройки Telegram: токен, канал, .env и пробная сводка"
     )
@@ -152,6 +159,20 @@ def cmd_export(args: argparse.Namespace) -> int:
     writer(lots, path)
     print(f"Выгружено лотов: {len(lots)} → {path}")
     return 0
+
+
+def cmd_inspect(args: argparse.Namespace) -> int:
+    from .inspect import inspect_tenders
+    from .pipeline import build_http
+
+    config = load_config(args.config)
+    http = build_http(config)
+    return inspect_tenders(
+        http,
+        limit=args.limit,
+        tender_ids=args.tender_ids or None,
+        active_only=not args.all,
+    )
 
 
 def cmd_setup(args: argparse.Namespace) -> int:
@@ -303,6 +324,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_setup(args)
     if command == "demo":
         return cmd_demo(args)
+    if command == "inspect":
+        return cmd_inspect(args)
 
     parser.print_help()
     return 2
