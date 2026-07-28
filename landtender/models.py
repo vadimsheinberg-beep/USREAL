@@ -52,6 +52,12 @@ class Lot:
 
     # Физика участка
     area_sqm: float | None = None
+    #: Площадь существующей застройки — признак того, что участок не пустой.
+    built_area_sqm: float | None = None
+    #: Вид работ: снос, усиление, расселение (см. renewal.py). None — пустой участок.
+    renewal_kind: str | None = None
+    #: Есть ли на участке строение. None — неизвестно.
+    has_structure: bool | None = None
     units: int | None = None
     units_basis: str | None = None
 

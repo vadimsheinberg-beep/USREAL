@@ -149,6 +149,75 @@ class TestRealPortalSchema:
         assert lot.guarantee_nis == pytest.approx(lot.price_nis * 0.1, rel=0.01)
 
 
+class TestRenewalLots:
+    """Участки со старыми строениями должны попадать в сводку наравне с пустыми."""
+
+    def source(self, details, name="חי/1/2026"):
+        routes = {
+            "SearchApi/Search": [{"MichrazID": 1, "MichrazName": name, "StatusMichraz": 1}],
+            "MichrazDetailsApi/Get": details,
+        }
+        return make_source(routes)
+
+    def test_built_area_marks_a_lot_as_having_a_structure(self):
+        details = {
+            "MichrazID": 1,
+            "Tik": [{"TikID": "A", "Shetach": 1200, "ShetachBniya": 3400, "MechirSaf": 9_000_000}],
+        }
+        lot = next(iter(self.source(details).fetch()))
+        assert lot.built_area_sqm == 3400.0
+        assert lot.has_structure is True
+        assert lot.renewal_kind == "existing_structure"
+
+    def test_pinui_binui_in_the_tender_name_is_recognised(self):
+        details = {"MichrazID": 1, "Tik": [{"TikID": "A", "Shetach": 900, "MechirSaf": 5_000_000}]}
+        lot = next(iter(self.source(details, name="מכרז פינוי בינוי 5/2026").fetch()))
+        assert lot.renewal_kind == "pinui_binui"
+        assert lot.has_structure is True
+
+    def test_demolition_note_on_the_plot_is_recognised(self):
+        details = {
+            "MichrazID": 1,
+            "Tik": [
+                {
+                    "TikID": "A",
+                    "Shetach": 900,
+                    "MechirSaf": 5_000_000,
+                    "Divur": "המגרש כולל מבנה ישן המיועד להריסה",
+                }
+            ],
+        }
+        lot = next(iter(self.source(details).fetch()))
+        assert lot.renewal_kind == "demolition"
+
+    def test_empty_plot_is_not_marked(self):
+        details = {
+            "MichrazID": 1,
+            "Tik": [{"TikID": "A", "Shetach": 900, "ShetachBniya": 0, "MechirSaf": 5_000_000}],
+        }
+        lot = next(iter(self.source(details).fetch()))
+        assert lot.renewal_kind is None
+        assert lot.has_structure is None
+
+    def test_renewal_lots_are_not_filtered_out(self):
+        """Главное требование: такие лоты идут в сводку, а не отсеиваются."""
+        details = {
+            "MichrazID": 1,
+            "Tik": [{"TikID": "A", "Shetach": 900, "ShetachBniya": 2000, "MechirSaf": 9_000_000}],
+        }
+        lots = list(self.source(details, name="פינוי בינוי").fetch())
+        assert len(lots) == 1
+        assert lots[0].price_nis == 9_000_000
+
+    def test_tender_without_details_still_gets_classified(self):
+        source = make_source({
+            "SearchApi/Search": [{"MichrazID": 1, "MichrazName": 'מכרז תמ"א 38 בחיפה'}],
+            "MichrazDetailsApi/Get": {},
+        })
+        lot = next(iter(source.fetch()))
+        assert lot.renewal_kind == "tama_38"
+
+
 class TestSettlementFilter:
     """Город портал отдаёт кодом ЦСБ, а текстом показывает только квартал."""
 

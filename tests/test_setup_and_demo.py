@@ -93,6 +93,12 @@ class TestDemo:
     def test_includes_changes_section(self):
         assert "Изменения по ранее найденным" in "\n".join(demo_blocks())
 
+    def test_shows_a_reconstruction_lot(self):
+        text = "\n".join(demo_blocks())
+        assert "🏚" in text
+        assert "פינוי בינוי" in text
+        assert "застройка 11 200 м²" in text
+
     def test_fits_into_telegram_messages(self):
         assert all(len(m) <= 4096 for m in chunk_blocks(demo_blocks()))
 

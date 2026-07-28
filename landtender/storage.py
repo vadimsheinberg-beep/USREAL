@@ -35,6 +35,9 @@ CREATE TABLE IF NOT EXISTS lots (
     tender_type            TEXT,
     status                 TEXT,
     area_sqm               REAL,
+    built_area_sqm         REAL,
+    renewal_kind           TEXT,
+    has_structure          INTEGER,
     units                  INTEGER,
     units_basis            TEXT,
     price_nis              REAL,
@@ -58,6 +61,7 @@ CREATE TABLE IF NOT EXISTS lots (
 CREATE INDEX IF NOT EXISTS idx_lots_tier ON lots(tier);
 CREATE INDEX IF NOT EXISTS idx_lots_first_seen ON lots(first_seen);
 CREATE INDEX IF NOT EXISTS idx_lots_source ON lots(source);
+CREATE INDEX IF NOT EXISTS idx_lots_renewal ON lots(renewal_kind);
 
 CREATE TABLE IF NOT EXISTS tender_cache (
     source       TEXT NOT NULL,
@@ -88,7 +92,8 @@ TRACKED_CHANGES = ("price_usd", "price_nis", "units", "status", "closing_date", 
 _LOT_COLUMNS = (
     "uid", "source", "source_id", "tender_id", "tender_name", "url",
     "settlement", "neighborhood", "region", "gush", "chelka",
-    "purpose", "tender_type", "status", "area_sqm", "units", "units_basis",
+    "purpose", "tender_type", "status", "area_sqm", "built_area_sqm",
+    "renewal_kind", "has_structure", "units", "units_basis",
     "price_nis", "price_kind", "development_costs_nis", "guarantee_nis", "price_usd",
     "fx_rate", "fx_date", "price_per_unit_usd", "price_per_sqm_usd", "tier",
     "published_date", "closing_date", "committee_date",

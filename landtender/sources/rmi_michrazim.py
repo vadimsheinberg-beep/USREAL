@@ -19,6 +19,7 @@ from typing import Any, Iterable
 
 from ..extract import (
     AREA_KEYS,
+    BUILD_AREA_KEYS,
     CHELKA_KEYS,
     CLOSING_KEYS,
     COMMITTEE_KEYS,
@@ -52,6 +53,7 @@ from ..places import code_for as code_for_place
 from ..places import matches as place_matches
 from ..places import resolve as resolve_places
 from ..money import choose_price
+from ..renewal import classify as classify_renewal
 from ..units import resolve_units, units_from_record
 from .base import Source
 
@@ -255,6 +257,11 @@ def _tender_meta(tender: dict[str, Any], codes: dict[str, dict[int, str]]) -> di
 
 def _tender_level_lot(meta: dict[str, Any], raw: dict[str, Any]) -> Lot:
     units, basis = _resolve_lot_units(raw, meta, meta.get("purpose"))
+    renewal_kind, has_structure = classify_renewal(
+        purpose=meta.get("purpose"),
+        tender_name=meta.get("tender_name"),
+        built_area=to_float(pick(raw, BUILD_AREA_KEYS)),
+    )
     return Lot(
         source=RmiMichrazimSource.name,
         source_id=f"{meta['tender_id']}",
@@ -269,6 +276,8 @@ def _tender_level_lot(meta: dict[str, Any], raw: dict[str, Any]) -> Lot:
         status=meta["status"],
         units=units,
         units_basis=basis,
+        renewal_kind=renewal_kind,
+        has_structure=has_structure,
         published_date=meta["published_date"],
         closing_date=meta["closing_date"],
         committee_date=meta["committee_date"],
@@ -417,6 +426,15 @@ def _lots_from_details(
         purpose = _decode(codes["purpose"], pick(node, PURPOSE_KEYS)) or meta["purpose"]
         units, basis = _resolve_lot_units(node, meta, purpose)
 
+        # Пустой это участок или площадка со старым строением под снос
+        built_area = to_float(pick(node, BUILD_AREA_KEYS))
+        renewal_kind, has_structure = classify_renewal(
+            purpose=purpose,
+            tender_name=meta.get("tender_name"),
+            comments=clean_text(pick(node, ("Divur", "Comments", "Teur", "הערות"))),
+            built_area=built_area,
+        )
+
         yield Lot(
             source=RmiMichrazimSource.name,
             source_id=f"{meta['tender_id']}:{key}",
@@ -432,6 +450,9 @@ def _lots_from_details(
             tender_type=meta["tender_type"],
             status=meta["status"],
             area_sqm=to_float(pick(node, AREA_KEYS)),
+            built_area_sqm=built_area,
+            renewal_kind=renewal_kind,
+            has_structure=has_structure,
             units=units,
             units_basis=basis,
             price_nis=price_nis,

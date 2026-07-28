@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 from .models import TIER_PREMIUM, TIER_STANDARD, TIER_UNKNOWN, Lot, RunResult
+from .renewal import badge as renewal_badge
 
 TIER_TITLES = {
     TIER_PREMIUM: "Дороже порога",
@@ -80,6 +81,10 @@ def _lot_line_html(lot: Lot) -> str:
         parts.append("  🏦 " + " · ".join(extra))
 
     tail = []
+    mark = renewal_badge(lot.renewal_kind)
+    if mark:
+        area = f", застройка {lot.built_area_sqm:,.0f} м²".replace(",", " ") if lot.built_area_sqm else ""
+        tail.append(f"🏚 {escape(mark)}{area}")
     if lot.purpose:
         tail.append(escape(lot.purpose))
     if lot.closing_date:
@@ -129,6 +134,9 @@ def build_telegram_digest(
         f"Порог: {fmt_usd(threshold_usd)} · {fx_line}",
         f"Просмотрено записей: {stats['total_seen']} · новых: {stats['new']} · изменившихся: {stats['changed']}",
     ]
+    renewal = [lot for lot in result.new_lots if lot.renewal_kind]
+    if renewal:
+        header.append(f"🏚 Со строениями / под реконструкцию: {len(renewal)}")
     blocks.append("\n".join(header))
 
     buckets = split_by_tier(result.new_lots)
@@ -217,8 +225,10 @@ def build_console_report(result: RunResult, threshold_usd: float) -> str:
         total_units = sum(lot.units or 0 for lot in lots)
         lines.append(f"--- {TIER_TITLES[tier]}: {len(lots)} лот(ов), единиц строений: {total_units} ---")
         for lot in lots[:50]:
+            mark = renewal_badge(lot.renewal_kind)
+            suffix = f"  🏚 {mark}" if mark else ""
             lines.append(
-                f"  {fmt_usd(lot.price_usd):>16}  ед.: {fmt_units(lot):>5}  {lot.label}"
+                f"  {fmt_usd(lot.price_usd):>16}  ед.: {fmt_units(lot):>5}  {lot.label}{suffix}"
             )
         lines.append("")
     return "\n".join(lines)
@@ -228,7 +238,8 @@ def build_console_report(result: RunResult, threshold_usd: float) -> str:
 
 EXPORT_FIELDS = (
     "uid", "source", "tender_id", "tender_name", "settlement", "neighborhood",
-    "gush", "chelka", "purpose", "status", "area_sqm", "units", "units_basis",
+    "gush", "chelka", "purpose", "status", "area_sqm", "built_area_sqm", "renewal_kind",
+    "has_structure", "units", "units_basis",
     "price_nis", "price_kind", "development_costs_nis", "guarantee_nis", "price_usd", "price_per_unit_usd", "price_per_sqm_usd",
     "tier", "published_date", "closing_date", "url",
 )

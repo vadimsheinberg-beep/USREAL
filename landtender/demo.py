@@ -30,7 +30,7 @@ FX_RATE = 3.6412
 
 
 def _demo_lots() -> list[Lot]:
-    """Пять лотов, покрывающих все ветки отчёта."""
+    """Шесть лотов, покрывающих все ветки отчёта, включая реконструкцию."""
     return [
         Lot(
             source="rmi_michrazim",
@@ -97,6 +97,27 @@ def _demo_lots() -> list[Lot]:
             area_sqm=780.0,
             price_nis=6_200_000.0,
             price_kind=PRICE_KIND_ASKING,
+        ),
+        Lot(
+            source="rmi_michrazim",
+            source_id="demo:6",
+            tender_id="20250145",
+            tender_name="מכרז פינוי בינוי 88/2026",
+            url="https://apps.land.gov.il/MichrazimSite/",
+            settlement="נתניה",
+            neighborhood="קרית השרון",
+            purpose="התחדשות עירונית",
+            area_sqm=6400.0,
+            built_area_sqm=11200.0,
+            renewal_kind="pinui_binui",
+            has_structure=True,
+            units=180,
+            units_basis=UNITS_REPORTED,
+            price_nis=24_000_000.0,
+            price_kind=PRICE_KIND_MIN,
+            development_costs_nis=7_100_000.0,
+            guarantee_nis=2_400_000.0,
+            closing_date="2026-10-20",
         ),
         Lot(
             source="gov_mr",
