@@ -54,35 +54,41 @@ DEFAULT_QUERIES = (
     "מתחמי התחדשות עירונית",
 )
 
-#: Название комплекса — у реестра обновления свои заголовки колонок.
+# Имена колонок сняты с живого набора командой `landtender inspect --ckan`.
+# Заголовки — транслитерация с иврита, как и у портала рм"י.
+
+#: Название комплекса.
 COMPLEX_NAME_KEYS = (
-    "שם המתחם",
-    "שם מתחם",
-    "שם הפרויקט",
-    "מתחם",
-    "ComplexName",
-    "SiteName",
+    "ShemMitcham", "שם המתחם", "שם מתחם", "ComplexName",
 ) + TENDER_NAME_KEYS
 
-#: Существующие единицы жилья — прямое свидетельство того, что дома уже стоят.
+#: Существующие единицы жилья — сколько квартир стоит сейчас.
+#: Прямое свидетельство того, что дома уже есть.
 EXISTING_UNITS_KEYS = (
-    "יחידות דיור קיימות",
-    'יח"ד קיימות',
-    "מספר יחידות קיימות",
-    "ExistingUnits",
-    "YechidotKayamot",
+    "YachadKayam", "יחידות דיור קיימות", 'יח"ד קיימות', "ExistingUnits",
 )
 
-#: Планируемые единицы — сколько будет после стройки.
+#: Итоговые единицы после стройки. YachadTosafti — прибавка, а не итог,
+#: поэтому идёт после YachadMutza.
 PLANNED_UNITS_KEYS = (
-    "יחידות דיור מתוכננות",
-    'יח"ד מתוכננות',
-    "יחידות דיור בתכנון",
-    "PlannedUnits",
+    "YachadMutza", "YachadTosafti", "יחידות דיור מתוכננות", "PlannedUnits",
 ) + UNITS_KEYS
 
 #: Маршрут проекта: פינוי בינוי, תמ"א 38 и т.п.
-TRACK_KEYS = ("מסלול", "סוג מתחם", "מסלול תכנוני", "Track", "ProjectType")
+TRACK_KEYS = ("Maslul", "מסלול", "סוג מתחם", "Track", "ProjectType")
+
+#: Код населённого пункта по ЦСБ — надёжнее названия.
+SETTLEMENT_CODE_KEYS = ("SemelYeshuv", "KodYeshuv", "סמל יישוב")
+
+#: Ссылка на карту комплекса — полезнее ссылки на набор данных.
+MAP_LINK_KEYS = ("KishurLaMapa", "KishurLatar", "Url", "קישור למפה")
+
+#: Дата объявления комплекса.
+DECLARED_KEYS = ("TaarichHachraza", "תאריך הכרזה", "DeclarationDate")
+
+#: Номер комплекса и номер плана — для опознания записи.
+COMPLEX_NUMBER_KEYS = ("MisparMitham", "מספר מתחם")
+PLAN_NUMBER_KEYS = ("MisparTochnit", "מספר תכנית")
 
 
 class UrbanRenewalSource(Source):
@@ -191,6 +197,10 @@ def _row_to_lot(row: dict[str, Any], resource_id: str, package_name: str) -> Lot
     existing_units = to_int(pick(row, EXISTING_UNITS_KEYS))
     planned_units = to_int(pick(row, PLANNED_UNITS_KEYS))
     track = clean_text(pick(row, TRACK_KEYS))
+    plan = clean_text(pick(row, PLAN_NUMBER_KEYS))
+    # Значения в наборе дополнены пробелами до фиксированной ширины —
+    # clean_text это снимает, но ссылку надо подрезать отдельно.
+    map_link = clean_text(pick(row, MAP_LINK_KEYS))
 
     # Всё в этом реестре стоит на застроенной земле — вопрос лишь в том,
     # какой именно маршрут. Если текст молчит, считаем расселением.
@@ -210,12 +220,13 @@ def _row_to_lot(row: dict[str, Any], resource_id: str, package_name: str) -> Lot
         source_id=f"{resource_id}:{row_id}",
         # Без названия оставляем нейтральную подпись: город добавит label,
         # иначе он печатается дважды.
+        tender_id=clean_text(pick(row, COMPLEX_NUMBER_KEYS)),
         tender_name=name or "מתחם התחדשות עירונית",
-        url=f"{DATASET_PAGE}?q={package_name}",
+        url=map_link or f"{DATASET_PAGE}?q={package_name}",
         settlement=settlement,
         neighborhood=clean_text(pick(row, NEIGHBORHOOD_KEYS)),
         region=clean_text(pick(row, REGION_KEYS)),
-        purpose=track or "התחדשות עירונית",
+        purpose=" · ".join(p for p in (track, plan) if p) or "התחדשות עירונית",
         status=clean_text(pick(row, STATUS_KEYS)),
         area_sqm=to_float(pick(row, AREA_KEYS)),
         units=planned_units or existing_units,
@@ -224,7 +235,7 @@ def _row_to_lot(row: dict[str, Any], resource_id: str, package_name: str) -> Lot
         has_structure=True,
         price_nis=price_nis,
         price_kind=price_kind,
-        published_date=to_iso_date(pick(row, PUBLISHED_KEYS)),
+        published_date=to_iso_date(pick(row, DECLARED_KEYS)) or to_iso_date(pick(row, PUBLISHED_KEYS)),
         closing_date=to_iso_date(pick(row, CLOSING_KEYS)),
         raw=row,
     )

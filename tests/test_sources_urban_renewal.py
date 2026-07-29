@@ -96,6 +96,69 @@ class TestFetch:
         assert len(lots) == 3
 
 
+class TestRealSchema:
+    """Схема снята с живого набора `urban_renewal` командой inspect --ckan.
+
+    Заголовки — транслитерация с иврита, а значения дополнены пробелами
+    до фиксированной ширины.
+    """
+
+    ROW = {
+        "_id": 1,
+        "MisparMitham": 4001,
+        "Yeshuv": "ירושלים" + " " * 200,
+        "SemelYeshuv": 3000,
+        "ShemMitcham": "ערבי נחל" + " " * 200,
+        "YachadKayam": "126",
+        "YachadTosafti": "108",
+        "YachadMutza": 530,
+        "TaarichHachraza": "20/08/2006",
+        "MisparTochnit": "גב/490" + " " * 100,
+        "KishurLaMapa": "https://www.govmap.gov.il/map.html?lay=X" + " " * 80,
+        "Maslul": "פינוי בינוי" + " " * 50,
+        "Status": "מוכרז",
+    }
+
+    def lot(self):
+        return next(iter(make([self.ROW]).fetch()))
+
+    def test_complex_name_is_read(self):
+        assert self.lot().tender_name == "ערבי נחל"
+
+    def test_trailing_padding_is_stripped(self):
+        assert self.lot().settlement == "ירושלים"
+
+    def test_final_unit_count_is_used(self):
+        """YachadMutza — итог после стройки, YachadTosafti лишь прибавка."""
+        assert self.lot().units == 530
+
+    def test_existing_units_fall_back_when_final_is_missing(self):
+        row = dict(self.ROW)
+        del row["YachadMutza"]
+        del row["YachadTosafti"]
+        assert next(iter(make([row]).fetch())).units == 126
+
+    def test_track_is_recognised(self):
+        lot = self.lot()
+        assert lot.renewal_kind == "pinui_binui"
+        assert "פינוי בינוי" in lot.purpose
+
+    def test_plan_number_joins_the_purpose(self):
+        assert "גב/490" in self.lot().purpose
+
+    def test_map_link_beats_the_dataset_page(self):
+        assert self.lot().url == "https://www.govmap.gov.il/map.html?lay=X"
+
+    def test_declaration_date_is_parsed(self):
+        assert self.lot().published_date == "2006-08-20"
+
+    def test_complex_number_becomes_the_tender_id(self):
+        assert self.lot().tender_id == "4001"
+
+    def test_still_marked_as_built_up(self):
+        assert self.lot().has_structure is True
+
+
 class TestResilience:
     def test_search_failure_does_not_raise(self):
         from landtender.http import HttpError
