@@ -193,3 +193,70 @@ def inspect_tenders(
         print(_fmt(details))
 
     return 0
+
+
+# --------------------------------------------------- разведка наборов CKAN --
+
+
+def inspect_ckan(http: HttpClient, query: str, limit: int = 2) -> int:
+    """Показывает настоящие названия колонок в наборах data.gov.il.
+
+    Нужна ровно затем же, зачем разведка портала рм"י: ивритские заголовки
+    колонок угадать нельзя, их надо увидеть.
+    """
+    from .sources.data_gov_il import DATASTORE_SEARCH_URL, PACKAGE_SEARCH_URL
+
+    print("=" * 72)
+    print(f"РАЗВЕДКА НАБОРОВ CKAN: {query!r}")
+    print("=" * 72)
+
+    try:
+        data = http.get_json(PACKAGE_SEARCH_URL, params={"q": query, "rows": 20})
+    except HttpError as exc:
+        print(f"✗ Поиск наборов не отвечает: {exc}")
+        return 1
+
+    packages = (data or {}).get("result", {}).get("results", [])
+    print(f"\nНайдено наборов: {len(packages)}")
+
+    shown = 0
+    for package in packages:
+        resources = [
+            r for r in (package.get("resources") or [])
+            if r.get("datastore_active") and r.get("id")
+        ]
+        if not resources:
+            continue
+
+        print("\n" + "-" * 72)
+        print(f"Набор: {package.get('title') or package.get('name')}")
+        print(f"  id: {package.get('name')}")
+        print(f"  описание: {(package.get('notes') or '')[:200]}")
+
+        for resource in resources[:2]:
+            try:
+                payload = http.get_json(
+                    DATASTORE_SEARCH_URL,
+                    params={"resource_id": resource["id"], "limit": 3},
+                )
+            except HttpError as exc:
+                print(f"  ✗ ресурс {resource['id']}: {exc}")
+                continue
+
+            result = (payload or {}).get("result", {})
+            fields = [f.get("id") for f in (result.get("fields") or [])]
+            records = result.get("records") or []
+            print(f"\n  Ресурс {resource['id']} — записей в наборе: {result.get('total', '?')}")
+            print(f"  Колонки: {fields}")
+            if records:
+                print("  Первая запись:")
+                print(_fmt(records[0], 1500))
+
+        shown += 1
+        if shown >= limit:
+            break
+
+    if shown == 0:
+        print("\n✗ Ни одного набора с загруженными в datastore данными не нашлось.")
+        return 1
+    return 0

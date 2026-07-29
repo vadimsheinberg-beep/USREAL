@@ -208,7 +208,9 @@ def _row_to_lot(row: dict[str, Any], resource_id: str, package_name: str) -> Lot
     return Lot(
         source=UrbanRenewalSource.name,
         source_id=f"{resource_id}:{row_id}",
-        tender_name=name or f"מתחם התחדשות · {settlement}",
+        # Без названия оставляем нейтральную подпись: город добавит label,
+        # иначе он печатается дважды.
+        tender_name=name or "מתחם התחדשות עירונית",
         url=f"{DATASET_PAGE}?q={package_name}",
         settlement=settlement,
         neighborhood=clean_text(pick(row, NEIGHBORHOOD_KEYS)),

@@ -71,6 +71,7 @@ def build_parser() -> argparse.ArgumentParser:
     inspect_cmd.add_argument("tender_ids", nargs="*", help="номера тендеров; по умолчанию первые из поиска")
     inspect_cmd.add_argument("--limit", type=int, default=3, help="сколько тендеров смотреть")
     inspect_cmd.add_argument("--all", action="store_true", help="искать среди всех, а не только активных")
+    inspect_cmd.add_argument("--ckan", help="вместо портала рм\"י разведать наборы data.gov.il по запросу")
 
     setup_cmd = sub.add_parser(
         "setup", help="мастер настройки Telegram: токен, канал, .env и пробная сводка"
@@ -167,6 +168,12 @@ def cmd_inspect(args: argparse.Namespace) -> int:
 
     config = load_config(args.config)
     http = build_http(config)
+
+    if args.ckan:
+        from .inspect import inspect_ckan
+
+        return inspect_ckan(http, args.ckan, limit=args.limit)
+
     return inspect_tenders(
         http,
         limit=args.limit,

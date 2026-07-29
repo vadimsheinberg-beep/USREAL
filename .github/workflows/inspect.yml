@@ -17,6 +17,10 @@ on:
         description: "Искать среди всех, а не только активных"
         type: boolean
         default: false
+      ckan_query:
+        description: "Разведать наборы data.gov.il по этому запросу (вместо рм\"י)"
+        type: string
+        default: ""
 
 jobs:
   inspect:
@@ -45,7 +49,12 @@ jobs:
           TENDER_IDS: ${{ github.event.inputs.tender_ids }}
           LIMIT: ${{ github.event.inputs.limit }}
           ALL_TENDERS: ${{ github.event.inputs.all_tenders }}
+          CKAN_QUERY: ${{ github.event.inputs.ckan_query }}
         run: |
+          if [ -n "$CKAN_QUERY" ]; then
+            landtender inspect --ckan "$CKAN_QUERY" --limit "${LIMIT:-3}"
+            exit $?
+          fi
           flags=""
           [ "$ALL_TENDERS" = "true" ] && flags="--all"
           landtender inspect $TENDER_IDS --limit "${LIMIT:-3}" $flags
