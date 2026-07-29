@@ -11,11 +11,13 @@ from .base import Source, SourceContext
 from .data_gov_il import DataGovIlSource
 from .gov_mr import GovMrSource
 from .rmi_michrazim import RmiMichrazimSource
+from .urban_renewal import UrbanRenewalSource
 from .yad2 import Yad2Source
 
 #: Порядок важен: сначала самый авторитетный источник по земле.
 ALL_SOURCES: tuple[type[Source], ...] = (
     RmiMichrazimSource,
+    UrbanRenewalSource,
     DataGovIlSource,
     GovMrSource,
     Yad2Source,
@@ -31,5 +33,6 @@ __all__ = [
     "DataGovIlSource",
     "GovMrSource",
     "RmiMichrazimSource",
+    "UrbanRenewalSource",
     "Yad2Source",
 ]

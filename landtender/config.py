@@ -46,6 +46,11 @@ DEFAULTS: dict[str, Any] = {
             "active_only": True,
             "settlements": [],
         },
+        "urban_renewal": {
+            "enabled": True,
+            "max_rows": 2000,
+            "queries": ["התחדשות עירונית", "פינוי בינוי", "מתחמי התחדשות עירונית"],
+        },
         "data_gov_il": {"enabled": True, "max_rows": 2000, "queries": ["מכרזי מקרקעין", "מכרזים רשות מקרקעי ישראל"]},
         "gov_mr": {"enabled": True, "max_pages": 5},
         "yad2": {"enabled": True, "max_pages": 5, "property_types": [39]},
