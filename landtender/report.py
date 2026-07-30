@@ -39,14 +39,20 @@ def fmt_units(lot: Lot) -> str:
     return f"{suffix}{lot.units}"
 
 
+TIER_ICONS = {TIER_PREMIUM: "🔥", TIER_STANDARD: "▫️", TIER_UNKNOWN: "❔"}
+
+
+def sort_by_price(lots: Sequence[Lot]) -> list[Lot]:
+    """Дорогие сверху, лоты без цены — в конце."""
+    return sorted(lots, key=lambda lot: (lot.price_usd is None, -(lot.price_usd or 0)))
+
+
 def split_by_tier(lots: Sequence[Lot]) -> dict[str, list[Lot]]:
     """Делит лоты на группы относительно порога в 1 млн долларов."""
     buckets: dict[str, list[Lot]] = {TIER_PREMIUM: [], TIER_STANDARD: [], TIER_UNKNOWN: []}
     for lot in lots:
         buckets.setdefault(lot.tier, []).append(lot)
-    for bucket in buckets.values():
-        bucket.sort(key=lambda lot: (lot.price_usd is None, -(lot.price_usd or 0)))
-    return buckets
+    return {tier: sort_by_price(bucket) for tier, bucket in buckets.items()}
 
 
 # --------------------------------------------------------------- Telegram ---
@@ -118,8 +124,14 @@ def build_telegram_digest(
     include_standard: bool = True,
     max_per_tier: int = 25,
     include_changes: bool = True,
+    split_by_threshold: bool = True,
 ) -> list[str]:
-    """Собирает блоки сообщения. Разбивку по лимиту Telegram делает нотифаер."""
+    """Собирает блоки сообщения. Разбивку по лимиту Telegram делает нотифаер.
+
+    При ``split_by_threshold=False`` выдача не делится по цене: одна секция со
+    всеми лотами, дорогие сверху. Цены при этом остаются на месте — убран
+    только отбор по ним.
+    """
     blocks: list[str] = []
     stats = result.stats()
 
@@ -131,7 +143,11 @@ def build_telegram_digest(
     header = [
         "<b>🇮🇱 Земельные тендеры Израиля — дневная сводка</b>",
         f"Дата: {result.started_at[:10]}",
-        f"Порог: {fmt_usd(threshold_usd)} · {fx_line}",
+        (
+            f"Порог: {fmt_usd(threshold_usd)} · {fx_line}"
+            if split_by_threshold
+            else f"Без отбора по цене и городам · {fx_line}"
+        ),
         f"Просмотрено записей: {stats['total_seen']} · новых: {stats['new']} · изменившихся: {stats['changed']}",
     ]
     renewal = [lot for lot in result.new_lots if lot.renewal_kind]
@@ -139,24 +155,29 @@ def build_telegram_digest(
         header.append(f"🏚 Со строениями / под реконструкцию: {len(renewal)}")
     blocks.append("\n".join(header))
 
-    buckets = split_by_tier(result.new_lots)
+    if split_by_threshold:
+        buckets = split_by_tier(result.new_lots)
+        order = [TIER_PREMIUM] + ([TIER_STANDARD] if include_standard else []) + [TIER_UNKNOWN]
+        sections = [(TIER_TITLES[t], TIER_ICONS[t], buckets.get(t, [])) for t in order]
+    else:
+        sections = [("Все лоты", "📋", sort_by_price(result.new_lots))]
 
-    order = [TIER_PREMIUM] + ([TIER_STANDARD] if include_standard else []) + [TIER_UNKNOWN]
-    for tier in order:
-        lots = buckets.get(tier, [])
+    for title_text, icon, lots in sections:
         if not lots:
             continue
-        icon = {"premium": "🔥", "standard": "▫️", "unknown": "❔"}[tier]
         total_units = sum(lot.units or 0 for lot in lots)
+        structures = sum(1 for lot in lots if lot.renewal_kind)
         title = (
-            f"{icon} <b>{TIER_TITLES[tier]}</b> — {len(lots)} лот(ов), "
+            f"{icon} <b>{title_text}</b> — {len(lots)} лот(ов), "
             f"единиц строений: {total_units or '—'}"
         )
+        if structures:
+            title += f", со строениями: {structures}"
         lines = [title]
         for lot in lots[:max_per_tier]:
             lines.append(_lot_line_html(lot))
         if len(lots) > max_per_tier:
-            lines.append(f"…и ещё {len(lots) - max_per_tier}")
+            lines.append(f"…и ещё {len(lots) - max_per_tier} — полный список в CSV")
         blocks.append("\n".join(lines))
 
     if include_changes and result.changed_lots:
@@ -190,14 +211,17 @@ def preview_messages(blocks: Sequence[str]) -> str:
 # ---------------------------------------------------------------- консоль ---
 
 
-def build_console_report(result: RunResult, threshold_usd: float) -> str:
+def build_console_report(
+    result: RunResult, threshold_usd: float, split_by_threshold: bool = True
+) -> str:
     stats = result.stats()
     lines = [
         "=" * 72,
         "ЗЕМЕЛЬНЫЕ ТЕНДЕРЫ ИЗРАИЛЯ — сводка за " + result.started_at[:10],
         "=" * 72,
         f"Курс USD/ILS: {result.fx_rate} ({result.fx_source}, {result.fx_date})",
-        f"Порог фильтра: {fmt_usd(threshold_usd)}",
+        f"Порог фильтра: {fmt_usd(threshold_usd)}" if split_by_threshold
+        else "Отбор по цене и городам отключён",
         "",
         "Источники:",
     ]
@@ -217,13 +241,21 @@ def build_console_report(result: RunResult, threshold_usd: float) -> str:
 
     lines += ["", f"Всего записей: {stats['total_seen']}, новых: {stats['new']}, изменилось: {stats['changed']}", ""]
 
-    buckets = split_by_tier(result.new_lots)
-    for tier in (TIER_PREMIUM, TIER_STANDARD, TIER_UNKNOWN):
-        lots = buckets.get(tier, [])
+    if split_by_threshold:
+        buckets = split_by_tier(result.new_lots)
+        groups = [(TIER_TITLES[t], buckets.get(t, [])) for t in (TIER_PREMIUM, TIER_STANDARD, TIER_UNKNOWN)]
+    else:
+        groups = [("Все лоты", sort_by_price(result.new_lots))]
+
+    for group_title, lots in groups:
         if not lots:
             continue
         total_units = sum(lot.units or 0 for lot in lots)
-        lines.append(f"--- {TIER_TITLES[tier]}: {len(lots)} лот(ов), единиц строений: {total_units} ---")
+        structures = sum(1 for lot in lots if lot.renewal_kind)
+        lines.append(
+            f"--- {group_title}: {len(lots)} лот(ов), единиц строений: {total_units}"
+            f", со строениями: {structures} ---"
+        )
         for lot in lots[:50]:
             mark = renewal_badge(lot.renewal_kind)
             suffix = f"  🏚 {mark}" if mark else ""

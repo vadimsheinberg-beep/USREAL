@@ -170,6 +170,7 @@ def notify(config: Config, storage: Storage, result: RunResult, dry_run: bool = 
         include_standard=bool(telegram.get("send_standard_tier", True)),
         max_per_tier=int(telegram.get("max_lots_per_tier", 25)),
         include_changes=bool(telegram.get("notify_changes", True)),
+        split_by_threshold=bool(config.get("general", "split_by_threshold", True)),
     )
 
     if dry_run:

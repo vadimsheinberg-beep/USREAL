@@ -113,7 +113,11 @@ def cmd_run(args: argparse.Namespace) -> int:
             only_sources=args.sources,
             full_refresh=args.full_refresh,
         )
-        print(build_console_report(result, config.threshold_usd))
+        print(build_console_report(
+            result,
+            config.threshold_usd,
+            split_by_threshold=bool(config.get("general", "split_by_threshold", True)),
+        ))
 
         if args.export_csv:
             path = export_csv(result.new_lots, Path(args.export_csv))
@@ -201,7 +205,10 @@ def cmd_demo(args: argparse.Namespace) -> int:
     from .notify import TelegramError, TelegramNotifier
 
     config = load_config(args.config)
-    blocks = demo_blocks(config.threshold_usd)
+    blocks = demo_blocks(
+        config.threshold_usd,
+        split_by_threshold=bool(config.get("general", "split_by_threshold", True)),
+    )
 
     if args.dry_run:
         print(preview_messages(blocks))

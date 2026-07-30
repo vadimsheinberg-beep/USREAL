@@ -128,6 +128,65 @@ class TestTelegramDigest:
         assert "&lt;script&gt;" in text
 
 
+class TestNoPriceSplit:
+    """Фильтр по цене снят: одна секция, дорогие сверху, цены на месте."""
+
+    def res(self):
+        return result(new_lots=[
+            lot(source_id="a", price_usd=5_000_000.0, tier=TIER_PREMIUM),
+            lot(source_id="b", price_usd=100_000.0, tier=TIER_STANDARD, units=10),
+            lot(source_id="c", price_usd=None, tier=TIER_UNKNOWN, units=5),
+        ])
+
+    def blocks(self):
+        return build_telegram_digest(self.res(), 1_000_000, split_by_threshold=False)
+
+    def test_single_section_instead_of_three(self):
+        text = "\n".join(self.blocks())
+        assert "Все лоты" in text
+        assert "Дороже порога" not in text
+        assert "Дешевле порога" not in text
+
+    def test_all_lots_are_in_it(self):
+        text = "\n".join(self.blocks())
+        assert "Все лоты</b> — 3 лот(ов)" in text
+
+    def test_header_says_no_filtering(self):
+        assert "Без отбора по цене и городам" in self.blocks()[0]
+
+    def test_prices_are_still_shown(self):
+        """Убран фильтр, а не цены."""
+        text = "\n".join(self.blocks())
+        assert "$5.00 млн" in text
+        assert "$100 000" in text
+
+    def test_expensive_lots_come_first(self):
+        text = "\n".join(self.blocks())
+        assert text.index("$5.00 млн") < text.index("$100 000")
+
+    def test_priceless_lots_come_last(self):
+        text = "\n".join(self.blocks())
+        money = [l for l in text.split("\n") if l.startswith("  💰")]
+        # У лота без цены в долларах строка начинается с прочерка
+        assert money[-1].startswith("  💰 —")
+        assert not money[0].startswith("  💰 —")
+
+    def test_structures_are_counted_in_the_title(self):
+        res = result(new_lots=[lot(renewal_kind="pinui_binui"), lot(source_id="2")])
+        text = "\n".join(build_telegram_digest(res, 1_000_000, split_by_threshold=False))
+        assert "со строениями: 1" in text
+
+    def test_split_still_works_when_enabled(self):
+        text = "\n".join(build_telegram_digest(self.res(), 1_000_000, split_by_threshold=True))
+        assert "Дороже порога" in text
+        assert "Все лоты" not in text
+
+    def test_console_report_also_merges(self):
+        text = build_console_report(self.res(), 1_000_000, split_by_threshold=False)
+        assert "Все лоты" in text
+        assert "Отбор по цене и городам отключён" in text
+
+
 class TestChunkBlocks:
     def test_short_blocks_join_into_one_message(self):
         assert len(chunk_blocks(["a", "b"], limit=100)) == 1

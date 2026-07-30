@@ -166,9 +166,19 @@ def demo_result(threshold_usd: float = 1_000_000.0) -> RunResult:
     )
 
 
-def demo_blocks(threshold_usd: float = 1_000_000.0) -> list[str]:
-    """Блоки сообщения для демонстрации — с предупреждением в начале."""
+def demo_blocks(
+    threshold_usd: float = 1_000_000.0, split_by_threshold: bool = True
+) -> list[str]:
+    """Блоки сообщения для демонстрации — с предупреждением в начале.
+
+    Настройка деления по цене передаётся насквозь: демонстрация должна
+    выглядеть так же, как настоящая сводка при текущем конфиге.
+    """
     from .report import build_telegram_digest
 
-    blocks = build_telegram_digest(demo_result(threshold_usd), threshold_usd=threshold_usd)
+    blocks = build_telegram_digest(
+        demo_result(threshold_usd),
+        threshold_usd=threshold_usd,
+        split_by_threshold=split_by_threshold,
+    )
     return [DEMO_WARNING, *blocks]
