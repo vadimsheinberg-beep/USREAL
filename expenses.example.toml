@@ -1,0 +1,119 @@
+# Конфигурация анализатора расходов. Скопируйте в expenses.toml.
+# Токены сюда не кладём — только имена переменных окружения (см. .env).
+
+[general]
+# Валюта отчёта. Операции в других валютах пересчитываются по [fx].rates.
+currency = "ILS"
+# Файл с накопленными операциями (JSONL, по одной на строку).
+data_path = "data/expenses.jsonl"
+# Глубина отчёта по умолчанию.
+months = 6
+top = 10
+
+[categories]
+# Встроенные правила: израильские сети (иврит + латиница) и мировые сервисы.
+use_defaults = true
+# Если ни одно правило не сработало — брать категорию, которую прислал источник.
+trust_source_category = false
+# Регулярное списание: минимум месяцев и допустимый разброс месячных сумм.
+recurring_min_months = 3
+recurring_tolerance = 0.25
+
+[fx]
+# Сколько единиц валюты отчёта за одну единицу указанной валюты.
+# rates = { USD = 3.70, EUR = 4.05 }
+rates = {}
+
+# --------------------------------------------------------------------------
+# Источник Babit
+# --------------------------------------------------------------------------
+# Порядок подключения:
+#   1. заполнить base_url и token_env, положить токен в .env;
+#   2. expenses babit-probe  — покажет сырой ответ и список полей;
+#   3. перенести имена полей в [sources.babit.fields];
+#   4. expenses fetch --months 6.
+[sources.babit]
+enabled = false
+base_url = "https://api.babit.example"
+transactions_path = "/v1/transactions"
+method = "GET"
+
+# bearer | header | query | basic | none
+auth = "bearer"
+token_env = "BABIT_API_TOKEN"
+# auth_header = "Authorization"      # для auth = "header"
+# auth_query_param = "api_key"       # для auth = "query"
+
+# Как передаётся период и в каком формате даты.
+date_from_param = "from"
+date_to_param = "to"
+date_format = "%Y-%m-%d"
+
+# page | offset | cursor | none
+pagination = "page"
+page_param = "page"
+size_param = "limit"
+page_size = 200
+first_page = 1
+# cursor_param = "cursor"
+# cursor_path = "meta.next_cursor"
+
+timeout = 30
+retries = 3
+
+# Статические query-параметры, если API их требует.
+# [sources.babit.params]
+# account_id = "12345"
+
+# Соответствие полей ответа модели транзакции. Значение — имя поля,
+# точечный путь ("payment.sum") или список кандидатов (["sum", "amount"]).
+[sources.babit.fields]
+date = "date"
+amount = "amount"
+description = "description"
+currency = "currency"
+source_id = "id"
+# merchant = "merchant.name"
+# category = "category"
+# account = "account_id"
+# Где внутри ответа лежит список операций, если он не находится сам.
+# records_path = "data.items"
+# Направление операции, если оно приходит отдельным полем.
+# direction = "type"
+# expense_values = ["debit", "charge"]
+# income_values = ["credit", "refund"]
+# Если направления нет: считать ли минус в сумме расходом.
+negative_is_expense = true
+default_currency = "ILS"
+
+# --------------------------------------------------------------------------
+# Маппинг колонок для команды `expenses import` (если не угадались сами)
+# --------------------------------------------------------------------------
+# [import.fields]
+# date = "תאריך עסקה"
+# amount = "סכום חיוב"
+# description = "שם בית עסק"
+
+# --------------------------------------------------------------------------
+# Свои правила категоризации. Приоритет выше встроенных.
+# --------------------------------------------------------------------------
+# [[rules]]
+# category = "Аренда"
+# patterns = ["landlord", "שכר דירה"]
+#
+# [[rules]]
+# category = "Помощь родителям"
+# patterns = ["перевод маме"]
+#
+# Правило может учитывать сумму и направление операции:
+# [[rules]]
+# category = "Крупные переводы"
+# patterns = ["העברה"]
+# min_amount = 5000
+# direction = "expense"
+#
+# И регулярное выражение вместо подстроки:
+# [[rules]]
+# category = "Такси"
+# patterns = ["^(gett|yango|uber)\\b"]
+# regex = true

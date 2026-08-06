@@ -2,6 +2,11 @@
 landtender.toml
 config.toml
 
+# Конфиг анализатора расходов (пример — expenses.example.toml) и сами операции
+expenses.toml
+expenses.local.toml
+*.jsonl
+
 # Секреты: токен бота и chat_id (пример лежит в .env.example)
 .env
 

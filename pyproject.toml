@@ -18,9 +18,10 @@ dev = ["pytest>=7"]
 
 [project.scripts]
 landtender = "landtender.cli:main"
+expenses = "expenses.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["landtender*"]
+include = ["landtender*", "expenses*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
