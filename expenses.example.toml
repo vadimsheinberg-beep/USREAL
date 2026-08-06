@@ -25,22 +25,59 @@ recurring_tolerance = 0.25
 rates = {}
 
 # --------------------------------------------------------------------------
-# Источник Babit
+# Биржа Bybit
+# --------------------------------------------------------------------------
+# Ключи лежат в .env (BYBIT_API_KEY / BYBIT_API_SECRET). Ключу нужны ТОЛЬКО
+# права на чтение — торговые права и права на перевод средств анализатору
+# не требуются, не выдавайте их.
+#
+#   expenses probe --source bybit     — проверить доступ
+#   expenses fetch --source bybit --months 6
+[sources.bybit]
+enabled = false
+api_key_env = "BYBIT_API_KEY"
+api_secret_env = "BYBIT_API_SECRET"
+testnet = false
+
+# UNIFIED — единый торговый счёт; у старых аккаунтов бывает CONTRACT.
+account_type = "UNIFIED"
+
+# Что забирать: вводы, выводы и журнал операций единого счёта.
+endpoints = ["deposits", "withdrawals", "transaction_log"]
+
+# Отдельные сделки — не траты, а обмен одной монеты на другую: по умолчанию
+# из сделок берётся только комиссия. Переводы между своими счетами — тоже
+# не траты.
+include_trades = false
+include_transfers = false
+
+# Bybit ограничивает окно выборки, длинный период режется на куски.
+log_window_days = 7
+asset_window_days = 30
+# Сколько истории брать, если период не задан явно.
+default_days = 180
+rate_limit_delay = 0.2
+
+# Монеты попадают в отчёт как валюты (USDT, BTC). Чтобы увидеть их в шекелях,
+# задайте курсы в [fx].rates, например: rates = { USDT = 3.70, BTC = 400000 }
+
+# --------------------------------------------------------------------------
+# Произвольный REST API (банк, платёжный сервис)
 # --------------------------------------------------------------------------
 # Порядок подключения:
 #   1. заполнить base_url и token_env, положить токен в .env;
-#   2. expenses babit-probe  — покажет сырой ответ и список полей;
-#   3. перенести имена полей в [sources.babit.fields];
-#   4. expenses fetch --months 6.
-[sources.babit]
+#   2. expenses probe --source rest — покажет сырой ответ и список полей;
+#   3. перенести имена полей в [sources.rest.fields];
+#   4. expenses fetch --source rest --months 6.
+[sources.rest]
 enabled = false
-base_url = "https://api.babit.example"
+base_url = "https://api.mybank.example"
 transactions_path = "/v1/transactions"
 method = "GET"
 
 # bearer | header | query | basic | none
 auth = "bearer"
-token_env = "BABIT_API_TOKEN"
+token_env = "EXPENSES_API_TOKEN"
 # auth_header = "Authorization"      # для auth = "header"
 # auth_query_param = "api_key"       # для auth = "query"
 
@@ -62,12 +99,12 @@ timeout = 30
 retries = 3
 
 # Статические query-параметры, если API их требует.
-# [sources.babit.params]
+# [sources.rest.params]
 # account_id = "12345"
 
 # Соответствие полей ответа модели транзакции. Значение — имя поля,
 # точечный путь ("payment.sum") или список кандидатов (["sum", "amount"]).
-[sources.babit.fields]
+[sources.rest.fields]
 date = "date"
 amount = "amount"
 description = "description"

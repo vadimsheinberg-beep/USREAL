@@ -1,15 +1,16 @@
-"""Коннектор к API Babit.
+"""Универсальный коннектор к REST API банка или платёжного сервиса.
 
-Спецификации API на момент написания не было, поэтому клиент сделан
-конфигурируемым: адрес, способ авторизации, параметры периода, схема
-пагинации и имена полей задаются в ``expenses.toml``. Для большинства
-REST-подобных API этого достаточно — код править не нужно.
+Клиент ничего не знает о конкретном API: адрес, способ авторизации,
+параметры периода, схема пагинации и имена полей задаются в
+``expenses.toml``. Для API с обычной авторизацией по токену этого
+достаточно — код править не нужно. Если API требует подпись запроса
+(как Bybit), нужен отдельный модуль-источник, см. :mod:`expenses.sources.bybit`.
 
 Порядок подключения:
 
-1. ``expenses babit-probe`` — покажет сырой ответ и угаданные поля;
-2. переносим имена полей в ``[sources.babit.fields]``;
-3. ``expenses fetch`` — операции сохраняются в локальное хранилище.
+1. ``expenses probe --source rest`` — покажет сырой ответ и угаданные поля;
+2. переносим имена полей в ``[sources.rest.fields]``;
+3. ``expenses fetch --source rest`` — операции сохраняются в хранилище.
 """
 
 from __future__ import annotations
@@ -30,15 +31,15 @@ from .base import FieldMap, extract_records, normalize_records, pick
 
 log = logging.getLogger(__name__)
 
-SOURCE_NAME = "babit"
+SOURCE_NAME = "rest"
 
 
-class BabitError(RuntimeError):
-    """Сетевая или конфигурационная проблема при обращении к Babit."""
+class RestError(RuntimeError):
+    """Сетевая или конфигурационная проблема при обращении к источнику."""
 
 
 @dataclass
-class BabitConfig:
+class RestConfig:
     """Настройки подключения. Всё, кроме ``base_url``, имеет разумный дефолт."""
 
     base_url: str = ""
@@ -48,10 +49,10 @@ class BabitConfig:
     #: ``bearer`` | ``header`` | ``query`` | ``basic`` | ``none``.
     auth: str = "bearer"
     #: Имя переменной окружения с токеном. Токен в конфиг не кладём.
-    token_env: str = "BABIT_API_TOKEN"
+    token_env: str = "EXPENSES_API_TOKEN"
     auth_header: str = "Authorization"
     auth_query_param: str = "api_key"
-    basic_user_env: str = "BABIT_USER"
+    basic_user_env: str = "EXPENSES_API_USER"
 
     #: Статические query-параметры (id счёта и подобное).
     params: dict[str, Any] = field(default_factory=dict)
@@ -84,11 +85,11 @@ class BabitConfig:
     fields: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> "BabitConfig":
+    def from_dict(cls, raw: dict[str, Any]) -> "RestConfig":
         known = {f for f in cls.__dataclass_fields__}
         unknown = set(raw) - known - {"enabled"}
         if unknown:
-            log.warning("неизвестные настройки Babit: %s", ", ".join(sorted(unknown)))
+            log.warning("неизвестные настройки источника: %s", ", ".join(sorted(unknown)))
         return cls(**{k: v for k, v in raw.items() if k in known})
 
     @property
@@ -96,13 +97,13 @@ class BabitConfig:
         return FieldMap.from_config(self.fields)
 
 
-class BabitClient:
-    """HTTP-клиент к Babit: авторизация, пагинация, ретраи."""
+class RestClient:
+    """HTTP-клиент к произвольному REST API: авторизация, пагинация, ретраи."""
 
-    def __init__(self, config: BabitConfig) -> None:
+    def __init__(self, config: RestConfig) -> None:
         if not config.base_url:
-            raise BabitError(
-                "не задан base_url для Babit — заполните [sources.babit] в expenses.toml"
+            raise RestError(
+                "не задан base_url для источника — заполните [sources.rest] в expenses.toml"
             )
         self.config = config
         self.session = self._build_session()
@@ -132,7 +133,7 @@ class BabitClient:
             user = os.environ.get(self.config.basic_user_env, "")
             session.auth = (user, token)
         elif auth not in {"query", "none"}:
-            raise BabitError(f"неизвестный способ авторизации: {self.config.auth}")
+            raise RestError(f"неизвестный способ авторизации: {self.config.auth}")
         return session
 
     def _token(self) -> str:
@@ -140,7 +141,7 @@ class BabitClient:
             return ""
         token = os.environ.get(self.config.token_env, "").strip()
         if not token:
-            raise BabitError(
+            raise RestError(
                 f"нет токена: переменная окружения {self.config.token_env} пуста. "
                 "Положите токен в .env — в git он не попадёт."
             )
@@ -173,21 +174,21 @@ class BabitClient:
                 verify=self.config.verify_ssl,
             )
         except requests.RequestException as exc:
-            raise BabitError(f"запрос к Babit не прошёл: {exc}") from exc
+            raise RestError(f"запрос к API не прошёл: {exc}") from exc
 
         if response.status_code in (401, 403):
-            raise BabitError(
-                f"Babit отверг авторизацию ({response.status_code}). "
+            raise RestError(
+                f"API отверг авторизацию ({response.status_code}). "
                 f"Проверьте {self.config.token_env} и способ auth={self.config.auth}."
             )
         if response.status_code >= 400:
-            raise BabitError(
-                f"Babit ответил {response.status_code}: {response.text[:200]}"
+            raise RestError(
+                f"API ответил {response.status_code}: {response.text[:200]}"
             )
         try:
             return response.json()
         except ValueError as exc:
-            raise BabitError(f"ответ Babit не JSON: {response.text[:200]}") from exc
+            raise RestError(f"ответ API не JSON: {response.text[:200]}") from exc
 
     def pages(self, since: date | None = None, until: date | None = None) -> Iterator[Any]:
         """Отдаёт ответы постранично, пока страницы не кончатся."""
@@ -211,7 +212,7 @@ class BabitClient:
                 if cursor:
                     page_params[self.config.cursor_param] = cursor
             else:
-                raise BabitError(f"неизвестный режим пагинации: {self.config.pagination}")
+                raise RestError(f"неизвестный режим пагинации: {self.config.pagination}")
 
             payload = self._request(page_params)
             yield payload
@@ -233,7 +234,7 @@ class BabitClient:
         for payload in self.pages(since, until):
             records = extract_records(payload, mapping.records_path)
             transactions += normalize_records(records, mapping, SOURCE_NAME)
-        log.info("Babit: получено операций — %d", len(transactions))
+        log.info("%s: получено операций — %d", SOURCE_NAME, len(transactions))
         return transactions
 
     def probe(self, since: date | None = None, until: date | None = None) -> str:
@@ -244,9 +245,9 @@ class BabitClient:
         """
         payload = next(iter(self.pages(since, until)), None)
         if payload is None:
-            return "Babit ничего не вернул."
+            return "API ничего не вернул."
 
-        lines = ["Ответ Babit (первая страница):", "-" * 56]
+        lines = ["Ответ API (первая страница):", "-" * 56]
         lines.append(json.dumps(payload, ensure_ascii=False, indent=2)[:2000])
         lines.append("-" * 56)
 
@@ -261,7 +262,7 @@ class BabitClient:
             keys = sorted(records[0].keys())
             lines.append("Поля первой записи: " + ", ".join(keys))
             lines.append("")
-            lines.append("Перенесите нужные в [sources.babit.fields], например:")
+            lines.append("Перенесите нужные в [sources.rest.fields], например:")
             lines.append("  date = \"" + _guess(keys, ("date", "time", "created")) + "\"")
             lines.append("  amount = \"" + _guess(keys, ("amount", "sum", "value", "price")) + "\"")
             lines.append("  description = \"" + _guess(keys, ("desc", "merchant", "name", "title")) + "\"")
@@ -282,10 +283,10 @@ def _safe_records(payload: Any, path: Any) -> list[dict[str, Any]]:
         return []
 
 
-def fetch_babit(
+def fetch_rest(
     raw_config: dict[str, Any],
     since: date | None = None,
     until: date | None = None,
 ) -> list[Transaction]:
     """Удобная обёртка: конфиг → список транзакций."""
-    return BabitClient(BabitConfig.from_dict(raw_config)).fetch(since, until)
+    return RestClient(RestConfig.from_dict(raw_config)).fetch(since, until)

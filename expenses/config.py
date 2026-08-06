@@ -45,16 +45,27 @@ DEFAULTS: dict[str, Any] = {
         "rates": {},
     },
     "sources": {
-        "babit": {
+        "bybit": {
+            "enabled": False,
+            "api_key_env": "BYBIT_API_KEY",
+            "api_secret_env": "BYBIT_API_SECRET",
+            "account_type": "UNIFIED",
+            "endpoints": ["deposits", "withdrawals", "transaction_log"],
+            "include_trades": False,
+            "include_transfers": False,
+            "default_days": 180,
+        },
+        #: Произвольный REST API банка — настраивается целиком конфигом.
+        "rest": {
             "enabled": False,
             "base_url": "",
             "transactions_path": "/transactions",
             "auth": "bearer",
-            "token_env": "BABIT_API_TOKEN",
+            "token_env": "EXPENSES_API_TOKEN",
             "pagination": "page",
             "page_size": 200,
             "fields": {},
-        }
+        },
     },
     #: Пользовательские правила категоризации, приоритет выше встроенных.
     "rules": [],

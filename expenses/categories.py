@@ -286,6 +286,20 @@ DEFAULT_RULES: list[tuple[str, list[str]]] = [
     ),
 ]
 
+#: Правила для операций с биржи. Работают по машинным меткам, которые
+#: проставляет :mod:`expenses.sources.bybit`, а не по тексту описания:
+#: описание там наше собственное и может меняться.
+DEFAULT_CRYPTO_RULES: list[tuple[str, list[str]]] = [
+    ("Вывод с биржи", ["bybit:withdraw"]),
+    ("Пополнение биржи", ["bybit:deposit"]),
+    ("Комиссии биржи", ["bybit:fee"]),
+    ("Фандинг", ["bybit:funding"]),
+    ("Проценты по займу", ["bybit:interest"]),
+    ("Сделки", ["bybit:trade"]),
+    ("Переводы между счетами", ["bybit:transfer"]),
+    ("Прочее на бирже", ["bybit:other"]),
+]
+
 #: Правила для поступлений — иначе зарплата уедет в «Переводы».
 DEFAULT_INCOME_RULES: list[tuple[str, list[str]]] = [
     ("Зарплата", ["משכורת", "salary", "зарплата", "payroll", "שכר"]),
@@ -298,6 +312,12 @@ def build_default_rules() -> list[Rule]:
     rules = [
         Rule(category=cat, patterns=pats, name=f"default:{cat}")
         for cat, pats in DEFAULT_RULES
+    ]
+    #: Метки биржи однозначны, поэтому проверяются раньше текстовых правил:
+    #: иначе «Вывод BTC» рискует зацепиться за что-нибудь по подстроке.
+    rules += [
+        Rule(category=cat, patterns=pats, name=f"default-crypto:{cat}", priority=50)
+        for cat, pats in DEFAULT_CRYPTO_RULES
     ]
     rules += [
         Rule(

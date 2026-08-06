@@ -4,8 +4,8 @@
 
     expenses demo                       # посмотреть, как выглядит отчёт
     expenses import выписка.csv         # загрузить выгрузку из банка
-    expenses babit-probe                # разглядеть схему ответа API
-    expenses fetch --months 6           # забрать операции из Babit
+    expenses probe --source bybit       # проверить ключи и доступ к API
+    expenses fetch --months 6           # забрать операции с Bybit
     expenses report --months 6          # помесячная сводка по категориям
     expenses unknown                    # что осталось без категории
 """
@@ -33,12 +33,21 @@ from .report import (
     render_recurring,
     render_text,
 )
-from .sources.babit import BabitClient, BabitConfig, BabitError
 from .sources.base import FieldMap, SourceError
+from .sources.bybit import BybitClient, BybitConfig, BybitError
 from .sources.files import load_file
+from .sources.rest import RestClient, RestConfig, RestError
 from .storage import Store
 
 log = logging.getLogger("expenses")
+
+#: Сетевые источники: имя в конфиге → как построить клиент и его ошибка.
+API_SOURCES = {
+    "bybit": (BybitClient, BybitConfig, BybitError),
+    "rest": (RestClient, RestConfig, RestError),
+}
+#: Ошибки источников ловятся одним except — сообщение у них уже понятное.
+API_ERRORS = (BybitError, RestError)
 
 
 def setup_logging(verbose: bool, quiet: bool) -> None:
@@ -64,11 +73,15 @@ def build_parser() -> argparse.ArgumentParser:
     import_cmd.add_argument("--source", help="как пометить источник (по умолчанию по расширению)")
     import_cmd.add_argument("--dry-run", action="store_true", help="показать итог, но не сохранять")
 
-    fetch_cmd = sub.add_parser("fetch", help="забрать операции из API Babit")
+    fetch_cmd = sub.add_parser("fetch", help="забрать операции из API (Bybit или свой REST)")
+    fetch_cmd.add_argument(
+        "--source", choices=sorted(API_SOURCES), default="bybit", help="откуда забирать"
+    )
     _add_period_args(fetch_cmd)
     fetch_cmd.add_argument("--dry-run", action="store_true", help="не сохранять, только показать")
 
-    probe_cmd = sub.add_parser("babit-probe", help="показать сырой ответ Babit и его поля")
+    probe_cmd = sub.add_parser("probe", help="проверить доступ к API и показать его поля")
+    probe_cmd.add_argument("--source", choices=sorted(API_SOURCES), default="bybit")
     _add_period_args(probe_cmd)
 
     report_cmd = sub.add_parser("report", help="помесячный отчёт по категориям")
@@ -179,35 +192,45 @@ def cmd_import(args: argparse.Namespace) -> int:
     return 0
 
 
+def _since_from_months(months: int | None) -> date | None:
+    """Начало периода для сетевых источников — первое число N-го месяца назад."""
+    if not months:
+        return None
+    today = date.today()
+    year, month = today.year, today.month - (months - 1)
+    while month <= 0:
+        month += 12
+        year -= 1
+    return date(year, month, 1)
+
+
+def _build_client(name: str, config):
+    client_cls, config_cls, error_cls = API_SOURCES[name]
+    return client_cls(config_cls.from_dict(config.source_config(name))), error_cls
+
+
 def cmd_fetch(args: argparse.Namespace) -> int:
     config = load_config(args.config)
-    raw = config.source_config("babit")
-    if not raw.get("enabled", False):
+    name = args.source
+    if not config.source_enabled(name):
         print(
-            "Источник babit выключен. Включите [sources.babit] enabled = true в expenses.toml.",
+            f"Источник {name} выключен. Включите [sources.{name}] enabled = true в expenses.toml.",
             file=sys.stderr,
         )
         return 2
 
-    since = _parse_day(args.since)
+    since = _parse_day(args.since) or _since_from_months(args.months)
     until = _parse_day(args.until)
-    if not since and args.months:
-        today = date.today()
-        year, month = today.year, today.month - (args.months - 1)
-        while month <= 0:
-            month += 12
-            year -= 1
-        since = date(year, month, 1)
 
     try:
-        client = BabitClient(BabitConfig.from_dict(raw))
+        client, error_cls = _build_client(name, config)
         transactions = client.fetch(since, until)
-    except BabitError as exc:
-        print(f"Babit: {exc}", file=sys.stderr)
+    except API_ERRORS as exc:
+        print(f"{name}: {exc}", file=sys.stderr)
         return 2
 
     if not transactions:
-        print("Babit не вернул операций за период.")
+        print(f"{name} не вернул операций за период.")
         return 0
 
     print(f"Получено операций: {len(transactions)}")
@@ -222,14 +245,13 @@ def cmd_fetch(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_babit_probe(args: argparse.Namespace) -> int:
+def cmd_probe(args: argparse.Namespace) -> int:
     config = load_config(args.config)
-    raw = config.source_config("babit")
     try:
-        client = BabitClient(BabitConfig.from_dict(raw))
+        client, _ = _build_client(args.source, config)
         print(client.probe(_parse_day(args.since), _parse_day(args.until)))
-    except BabitError as exc:
-        print(f"Babit: {exc}", file=sys.stderr)
+    except API_ERRORS as exc:
+        print(f"{args.source}: {exc}", file=sys.stderr)
         return 2
     return 0
 
@@ -380,7 +402,7 @@ def main(argv: list[str] | None = None) -> int:
     commands = {
         "import": cmd_import,
         "fetch": cmd_fetch,
-        "babit-probe": cmd_babit_probe,
+        "probe": cmd_probe,
         "report": cmd_report,
         "recurring": cmd_recurring,
         "unknown": cmd_unknown,

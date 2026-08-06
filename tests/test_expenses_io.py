@@ -1,4 +1,4 @@
-"""Импорт файлов, хранилище, пересчёт валют, клиент Babit и CLI."""
+"""Импорт файлов, хранилище, пересчёт валют, REST-клиент и CLI."""
 
 import json
 from datetime import date
@@ -10,7 +10,7 @@ from expenses.config import Config, parse_env_file
 from expenses.fx import convert, currencies
 from expenses.models import Transaction
 from expenses.report import render_csv, render_json, render_markdown, render_text
-from expenses.sources.babit import BabitClient, BabitConfig, BabitError
+from expenses.sources.rest import RestClient, RestConfig, RestError
 from expenses.sources.base import FieldMap, SourceError
 from expenses.sources.files import guess_mapping, load_file
 from expenses.storage import Store
@@ -93,7 +93,7 @@ class TestStore:
 
     def test_duplicates_are_not_added_twice(self, tmp_path):
         item = Transaction(
-            date=date(2026, 3, 1), amount=10, description="A", source="babit", source_id="x1"
+            date=date(2026, 3, 1), amount=10, description="A", source="bybit", source_id="x1"
         )
         store = Store(tmp_path / "data.jsonl")
         assert store.add([item]) == (1, 0)
@@ -148,32 +148,32 @@ class FakeResponse:
         return self._payload
 
 
-class TestBabitClient:
+class TestRestClient:
     @pytest.fixture
     def config(self):
-        return BabitConfig(
-            base_url="https://api.babit.test",
+        return RestConfig(
+            base_url="https://api.example.test",
             transactions_path="/v1/transactions",
             page_size=2,
             fields={"records_path": "data"},
         )
 
     def test_requires_token(self, config, monkeypatch):
-        monkeypatch.delenv("BABIT_API_TOKEN", raising=False)
-        with pytest.raises(BabitError, match="токен"):
-            BabitClient(config)
+        monkeypatch.delenv("EXPENSES_API_TOKEN", raising=False)
+        with pytest.raises(RestError, match="токен"):
+            RestClient(config)
 
     def test_requires_base_url(self):
-        with pytest.raises(BabitError, match="base_url"):
-            BabitClient(BabitConfig())
+        with pytest.raises(RestError, match="base_url"):
+            RestClient(RestConfig())
 
     def test_paginates_until_short_page(self, config, monkeypatch):
-        monkeypatch.setenv("BABIT_API_TOKEN", "secret")
+        monkeypatch.setenv("EXPENSES_API_TOKEN", "secret")
         pages = [
             {"data": [_rec("1"), _rec("2")]},
             {"data": [_rec("3")]},
         ]
-        client = BabitClient(config)
+        client = RestClient(config)
         calls: list[dict] = []
 
         def fake_request(method, url, **kwargs):
@@ -188,27 +188,27 @@ class TestBabitClient:
         assert calls[0]["from"] == "2026-03-01" and calls[0]["to"] == "2026-03-31"
 
     def test_sends_bearer_token(self, config, monkeypatch):
-        monkeypatch.setenv("BABIT_API_TOKEN", "secret")
-        assert BabitClient(config).session.headers["Authorization"] == "Bearer secret"
+        monkeypatch.setenv("EXPENSES_API_TOKEN", "secret")
+        assert RestClient(config).session.headers["Authorization"] == "Bearer secret"
 
     def test_auth_failure_is_explained(self, config, monkeypatch):
-        monkeypatch.setenv("BABIT_API_TOKEN", "secret")
-        client = BabitClient(config)
+        monkeypatch.setenv("EXPENSES_API_TOKEN", "secret")
+        client = RestClient(config)
         monkeypatch.setattr(
             client.session, "request", lambda *a, **k: FakeResponse({"error": "no"}, 401)
         )
-        with pytest.raises(BabitError, match="авторизацию"):
+        with pytest.raises(RestError, match="авторизацию"):
             client.fetch()
 
     def test_cursor_pagination(self, monkeypatch):
-        monkeypatch.setenv("BABIT_API_TOKEN", "secret")
-        config = BabitConfig(
-            base_url="https://api.babit.test",
+        monkeypatch.setenv("EXPENSES_API_TOKEN", "secret")
+        config = RestConfig(
+            base_url="https://api.example.test",
             pagination="cursor",
             cursor_path="meta.next",
             fields={"records_path": "data"},
         )
-        client = BabitClient(config)
+        client = RestClient(config)
         pages = [
             {"data": [_rec("1")], "meta": {"next": "abc"}},
             {"data": [_rec("2")], "meta": {"next": None}},
@@ -224,8 +224,8 @@ class TestBabitClient:
         assert seen[1]["cursor"] == "abc"
 
     def test_probe_shows_fields(self, config, monkeypatch):
-        monkeypatch.setenv("BABIT_API_TOKEN", "secret")
-        client = BabitClient(config)
+        monkeypatch.setenv("EXPENSES_API_TOKEN", "secret")
+        client = RestClient(config)
         monkeypatch.setattr(
             client.session, "request", lambda *a, **k: FakeResponse({"data": [_rec("1")]})
         )
@@ -285,7 +285,7 @@ class TestConfig:
     def test_defaults_are_available_without_file(self):
         config = Config()
         assert config.currency == "ILS"
-        assert config.source_enabled("babit") is False
+        assert config.source_enabled("bybit") is False
 
     def test_fx_rates_are_normalised(self):
         config = Config()
@@ -338,7 +338,7 @@ class TestCli:
 
     def test_fetch_without_config_is_a_clear_error(self, tmp_path, capsys):
         assert main(["--data", str(tmp_path / "d.jsonl"), "fetch"]) == 2
-        assert "babit" in capsys.readouterr().err
+        assert "bybit" in capsys.readouterr().err
 
     def test_report_json_to_file(self, tmp_path, capsys):
         statement = tmp_path / "s.csv"

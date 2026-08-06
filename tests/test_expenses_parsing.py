@@ -83,7 +83,7 @@ class TestNormalizeRecord:
             "description": "SHUFERSAL DEAL",
             "currency": "ILS",
         }
-        tx = normalize_record(record, FieldMap(), "babit")
+        tx = normalize_record(record, FieldMap(), "bank")
         assert tx.source_id == "tx-1"
         assert tx.amount == 120.5  # модуль суммы
         assert tx.direction == DIRECTION_EXPENSE
@@ -91,18 +91,18 @@ class TestNormalizeRecord:
 
     def test_positive_amount_is_income_by_default(self):
         record = {"id": "2", "date": "2026-03-15", "amount": 9000, "description": "SALARY"}
-        assert normalize_record(record, FieldMap(), "babit").direction == DIRECTION_INCOME
+        assert normalize_record(record, FieldMap(), "bank").direction == DIRECTION_INCOME
 
     def test_inverted_sign_convention(self):
         # Некоторые API отдают расход положительным числом.
         mapping = FieldMap(negative_is_expense=False)
         record = {"id": "3", "date": "2026-03-15", "amount": 50, "description": "CAFE"}
-        assert normalize_record(record, mapping, "babit").direction == DIRECTION_EXPENSE
+        assert normalize_record(record, mapping, "bank").direction == DIRECTION_EXPENSE
 
     def test_explicit_direction_field_wins_over_sign(self):
         mapping = FieldMap(direction="type", expense_values=("DEBIT",))
         record = {"id": "4", "date": "2026-03-15", "amount": 50, "description": "X", "type": "DEBIT"}
-        assert normalize_record(record, mapping, "babit").direction == DIRECTION_EXPENSE
+        assert normalize_record(record, mapping, "bank").direction == DIRECTION_EXPENSE
 
     def test_nested_paths(self):
         mapping = FieldMap(
@@ -113,12 +113,12 @@ class TestNormalizeRecord:
             "payment": {"sum": "-15.00"},
             "merchant": {"name": "AROMA"},
         }
-        tx = normalize_record(record, mapping, "babit")
+        tx = normalize_record(record, mapping, "bank")
         assert (tx.date, tx.amount, tx.description) == (date(2026, 4, 2), 15.0, "AROMA")
 
     def test_missing_description_gets_placeholder(self):
         record = {"id": "5", "date": "2026-03-15", "amount": -10}
-        assert normalize_record(record, FieldMap(), "babit").description == "без описания"
+        assert normalize_record(record, FieldMap(), "bank").description == "без описания"
 
 
 class TestNormalizeRecords:
