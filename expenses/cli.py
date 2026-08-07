@@ -24,6 +24,7 @@ from .analyze import filter_period, find_recurring
 from .categories import Categorizer, rules_from_config
 from .config import load_config
 from .demo import generate as generate_demo
+from .html_report import render_html
 from .models import Transaction
 from .report import (
     money,
@@ -48,6 +49,9 @@ API_SOURCES = {
 }
 #: Ошибки источников ловятся одним except — сообщение у них уже понятное.
 API_ERRORS = (BybitError, RestError)
+
+#: Куда класть html-отчёт, если файл не указан явно.
+DEFAULT_HTML_OUT = "expenses-report.html"
 
 
 def setup_logging(verbose: bool, quiet: bool) -> None:
@@ -87,7 +91,10 @@ def build_parser() -> argparse.ArgumentParser:
     report_cmd = sub.add_parser("report", help="помесячный отчёт по категориям")
     _add_period_args(report_cmd)
     report_cmd.add_argument(
-        "--format", choices=("text", "md", "csv", "json"), default="text", help="формат вывода"
+        "--format",
+        choices=("text", "html", "md", "csv", "json"),
+        default="text",
+        help="формат вывода; html — страница со сводной таблицей",
     )
     report_cmd.add_argument("--out", help="записать в файл вместо вывода в консоль")
     report_cmd.add_argument("--top", type=int, help="сколько строк показывать в топах")
@@ -277,7 +284,9 @@ def cmd_report(args: argparse.Namespace) -> int:
 
     top = args.top or int(config.get("general", "top", 10))
     currency = config.currency
-    if args.format == "md":
+    if args.format == "html":
+        text = render_html(items, currency=currency, top=top)
+    elif args.format == "md":
         text = render_markdown(items, currency=currency, top=top)
     elif args.format == "csv":
         text = render_csv(items)
@@ -286,9 +295,12 @@ def cmd_report(args: argparse.Namespace) -> int:
     else:
         text = render_text(items, currency=currency, top=top)
 
-    if args.out:
-        Path(args.out).write_text(text, encoding="utf-8")
-        print(f"Отчёт записан: {args.out}")
+    #: Вываливать разметку в терминал бессмысленно, поэтому у html есть
+    #: имя файла по умолчанию — его сразу можно открыть.
+    out = args.out or (DEFAULT_HTML_OUT if args.format == "html" else None)
+    if out:
+        Path(out).write_text(text, encoding="utf-8")
+        print(f"Отчёт записан: {Path(out).resolve()}")
     else:
         print(text)
     return 0
