@@ -14,18 +14,20 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from datetime import date
 from pathlib import Path
 from typing import Sequence
 
 from . import fx
-from .analyze import filter_period, find_recurring
+from .analyze import filter_period, find_recurring, monthly_summary
 from .categories import Categorizer, rules_from_config
 from .config import load_config
 from .demo import generate as generate_demo
 from .html_report import render_html
 from .models import Transaction
+from .notify import TelegramError, TelegramNotifier, build_summary, month_name
 from .report import (
     money,
     render_csv,
@@ -113,6 +115,19 @@ def build_parser() -> argparse.ArgumentParser:
     demo_cmd = sub.add_parser("demo", help="сгенерировать демо-выписку и показать отчёт")
     demo_cmd.add_argument("--months", type=int, default=6, help="за сколько месяцев")
     demo_cmd.add_argument("--save", action="store_true", help="сохранить демо в хранилище")
+
+    monthly_cmd = sub.add_parser(
+        "monthly", help="собрать данные и прислать месячный отчёт в Telegram"
+    )
+    monthly_cmd.add_argument("--months", type=int, help="глубина отчёта, месяцев")
+    monthly_cmd.add_argument(
+        "--dry-run", action="store_true", help="показать сводку, но не отправлять"
+    )
+    monthly_cmd.add_argument(
+        "--no-fetch", action="store_true", help="не ходить в API, взять что уже в хранилище"
+    )
+
+    sub.add_parser("telegram-test", help="проверить доступ к Telegram")
 
     sub.add_parser("stats", help="что лежит в хранилище")
 
@@ -389,6 +404,131 @@ def cmd_demo(args: argparse.Namespace) -> int:
     return 0
 
 
+def _notifier(config) -> TelegramNotifier:
+    section = config.section("telegram")
+    return TelegramNotifier(
+        bot_token=_secret(section.get("bot_token", "env:TELEGRAM_BOT_TOKEN")),
+        chat_id=_secret(section.get("chat_id", "env:TELEGRAM_CHAT_ID")),
+    )
+
+
+def _secret(value) -> str:
+    """``env:NAME`` разворачивает в переменную окружения — токены не в конфиге."""
+    text = str(value or "")
+    if text.startswith("env:"):
+        return os.environ.get(text[4:].strip(), "")
+    return text
+
+
+def _collect_inbox(config, store: Store, categorizer: Categorizer) -> int:
+    """Забирает выписки, положенные в каталог inbox, и убирает их в архив.
+
+    Банковские выгрузки автоматически не скачиваются, поэтому файл просто
+    кладут на сервер; разобранные складываются в ``archive``, чтобы
+    следующий запуск не читал их снова.
+    """
+    raw = config.get("general", "inbox_path")
+    if not raw:
+        return 0
+    inbox = Path(str(raw)).expanduser()
+    if not inbox.is_absolute() and config.path is not None:
+        inbox = config.path.parent / inbox
+    if not inbox.is_dir():
+        return 0
+
+    archive = inbox / "archive"
+    added_total = 0
+    for path in sorted(inbox.iterdir()):
+        if not path.is_file() or path.suffix.lower() not in {".csv", ".tsv", ".json", ".jsonl"}:
+            continue
+        try:
+            items = load_file(path)
+        except SourceError as exc:
+            log.warning("выписка %s не разобралась: %s", path.name, exc)
+            continue
+        categorizer.categorize_all(items)
+        added, duplicates = store.add(items)
+        added_total += added
+        log.info("%s: новых %d, дубликатов %d", path.name, added, duplicates)
+        archive.mkdir(parents=True, exist_ok=True)
+        path.replace(archive / path.name)
+    return added_total
+
+
+def cmd_monthly(args: argparse.Namespace) -> int:
+    """Один запуск по расписанию: собрать, посчитать, отправить."""
+    config = load_config(args.config)
+    store = _open_store(args, config)
+    store.load()
+    categorizer = _categorizer(config)
+
+    if not args.no_fetch:
+        for name in sorted(API_SOURCES):
+            if not config.source_enabled(name):
+                continue
+            try:
+                client, _ = _build_client(name, config)
+                fetched = client.fetch()
+            except API_ERRORS as exc:
+                #: Отчёт важнее свежести: шлём по тому, что уже накоплено.
+                log.error("%s: %s", name, exc)
+                continue
+            categorizer.categorize_all(fetched)
+            added, duplicates = store.add(fetched)
+            log.info("%s: новых %d, дубликатов %d", name, added, duplicates)
+
+    _collect_inbox(config, store, categorizer)
+    store.save()
+
+    stored = store.transactions
+    if not stored:
+        print("Хранилище пустое — отправлять нечего.", file=sys.stderr)
+        return 1
+
+    items = _prepare(stored, config, args)
+    if not items:
+        print("За период нет операций.", file=sys.stderr)
+        return 1
+
+    currency = config.currency
+    summary = build_summary(items, currency)
+
+    if args.dry_run:
+        print(summary)
+        print("\n(--dry-run: в Telegram ничего не отправлено)")
+        return 0
+
+    report_dir = config.data_path.parent
+    report_dir.mkdir(parents=True, exist_ok=True)
+    last_month = monthly_summary(items)[-1].month
+    report_path = report_dir / f"expenses-{last_month}.html"
+    report_path.write_text(
+        render_html(items, currency=currency, title=f"Расходы, {month_name(last_month)}"),
+        encoding="utf-8",
+    )
+
+    try:
+        notifier = _notifier(config)
+        notifier.send_message(summary)
+        notifier.send_document(report_path, caption="Полный отчёт: таблица по категориям")
+    except TelegramError as exc:
+        print(f"Telegram: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"Отчёт за {month_name(last_month)} отправлен. Файл: {report_path}")
+    return 0
+
+
+def cmd_telegram_test(args: argparse.Namespace) -> int:
+    config = load_config(args.config)
+    try:
+        print("Telegram доступен:", _notifier(config).check())
+    except TelegramError as exc:
+        print(f"Telegram: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
 def cmd_stats(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     store = _open_store(args, config)
@@ -419,6 +559,8 @@ def main(argv: list[str] | None = None) -> int:
         "recurring": cmd_recurring,
         "unknown": cmd_unknown,
         "test-rule": cmd_test_rule,
+        "monthly": cmd_monthly,
+        "telegram-test": cmd_telegram_test,
         "demo": cmd_demo,
         "stats": cmd_stats,
     }

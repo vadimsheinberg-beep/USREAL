@@ -25,6 +25,9 @@ DEFAULTS: dict[str, Any] = {
         "currency": "ILS",
         #: Куда складывать импортированные операции.
         "data_path": "data/expenses.jsonl",
+        #: Каталог, куда кладут выписки банка: `expenses monthly` их
+        #: подхватит и уберёт в подкаталог archive. Пусто — не искать.
+        "inbox_path": "",
         #: Глубина отчёта по умолчанию, в месяцах.
         "months": 6,
         #: Сколько строк показывать в топах.
@@ -66,6 +69,11 @@ DEFAULTS: dict[str, Any] = {
             "page_size": 200,
             "fields": {},
         },
+    },
+    "telegram": {
+        #: Токены живут в окружении, в конфиг попадают только их имена.
+        "bot_token": "env:TELEGRAM_BOT_TOKEN",
+        "chat_id": "env:TELEGRAM_CHAT_ID",
     },
     #: Пользовательские правила категоризации, приоритет выше встроенных.
     "rules": [],
