@@ -136,3 +136,50 @@ def test_reopening_database_keeps_data(tmp_path):
     with Storage(path) as store:
         assert store.count_lots() == 1
         assert store.upsert_lot(make_lot(), LATER)[0] == "same"
+
+
+class TestMigration:
+    """Новая колонка не должна требовать стирания накопленной базы."""
+
+    OLD_SCHEMA = """
+    CREATE TABLE lots (
+        uid TEXT PRIMARY KEY, source TEXT NOT NULL, source_id TEXT NOT NULL,
+        content_hash TEXT NOT NULL, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL
+    );
+    """
+
+    def old_database(self, tmp_path):
+        import sqlite3
+
+        path = tmp_path / "old.sqlite3"
+        conn = sqlite3.connect(path)
+        conn.executescript(self.OLD_SCHEMA)
+        conn.execute("INSERT INTO lots VALUES ('rmi_michrazim:old', 'rmi_michrazim', 'old', 'h', ?, ?)", (NOW, NOW))
+        conn.commit()
+        conn.close()
+        return path
+
+    def test_missing_columns_are_added(self, tmp_path):
+        from landtender.storage import _LOT_COLUMNS
+
+        with Storage(self.old_database(tmp_path)) as store:
+            present = {row[1] for row in store.conn.execute("PRAGMA table_info(lots)")}
+        assert set(_LOT_COLUMNS) <= present
+
+    def test_existing_rows_survive(self, tmp_path):
+        with Storage(self.old_database(tmp_path)) as store:
+            assert store.count_lots() == 1
+
+    def test_writes_work_after_migration(self, tmp_path):
+        with Storage(self.old_database(tmp_path)) as store:
+            assert store.upsert_lot(make_lot(land_use="agriculture"), LATER)[0] == "new"
+            row = store.get_lot_row("rmi_michrazim:20250142:10769/42")
+            assert row["land_use"] == "agriculture"
+
+    def test_migration_is_idempotent(self, tmp_path):
+        path = self.old_database(tmp_path)
+        for _ in range(3):
+            with Storage(path) as store:
+                store.upsert_lot(make_lot(), LATER)
+        with Storage(path) as store:
+            assert store.count_lots() == 2

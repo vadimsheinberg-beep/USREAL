@@ -59,12 +59,6 @@ CREATE TABLE IF NOT EXISTS lots (
     last_seen              TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_lots_tier ON lots(tier);
-CREATE INDEX IF NOT EXISTS idx_lots_first_seen ON lots(first_seen);
-CREATE INDEX IF NOT EXISTS idx_lots_source ON lots(source);
-CREATE INDEX IF NOT EXISTS idx_lots_renewal ON lots(renewal_kind);
-CREATE INDEX IF NOT EXISTS idx_lots_land_use ON lots(land_use);
-
 CREATE TABLE IF NOT EXISTS tender_cache (
     source       TEXT NOT NULL,
     tender_id    TEXT NOT NULL,
@@ -88,6 +82,16 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 """
 
+#: Индексы создаются после миграции: на только что добавленную колонку
+#: индекс не построить, пока её нет в таблице.
+INDEXES = """
+CREATE INDEX IF NOT EXISTS idx_lots_tier ON lots(tier);
+CREATE INDEX IF NOT EXISTS idx_lots_first_seen ON lots(first_seen);
+CREATE INDEX IF NOT EXISTS idx_lots_source ON lots(source);
+CREATE INDEX IF NOT EXISTS idx_lots_renewal ON lots(renewal_kind);
+CREATE INDEX IF NOT EXISTS idx_lots_land_use ON lots(land_use);
+"""
+
 #: Поля, изменение которых интересно показать в сводке отдельной строкой.
 TRACKED_CHANGES = ("price_usd", "price_nis", "units", "status", "closing_date", "tier")
 
@@ -103,6 +107,18 @@ _LOT_COLUMNS = (
 )
 
 
+def _schema_columns() -> list[tuple[str, str]]:
+    """Колонки таблицы ``lots`` из SCHEMA — источник правды для миграции."""
+    body = SCHEMA.split("CREATE TABLE IF NOT EXISTS lots (", 1)[1].split(");", 1)[0]
+    columns: list[tuple[str, str]] = []
+    for line in body.splitlines():
+        parts = line.strip().rstrip(",").split()
+        # NOT NULL новой колонке дать нельзя — у существующих строк её нет
+        if len(parts) >= 2 and parts[0].isidentifier():
+            columns.append((parts[0], parts[1]))
+    return columns
+
+
 class Storage:
     """Обёртка над SQLite. Используется как контекстный менеджер."""
 
@@ -112,7 +128,25 @@ class Storage:
         self.conn = sqlite3.connect(self.path)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        self._migrate()
+        self.conn.executescript(INDEXES)
         self.conn.commit()
+
+    def _migrate(self) -> None:
+        """Дописывает колонки, появившиеся в схеме после создания базы.
+
+        ``CREATE TABLE IF NOT EXISTS`` старую таблицу не трогает, поэтому без
+        этого шага новая колонка ломала бы INSERT на уже накопленной базе — и
+        базу приходилось бы стирать, а вместе с ней историю уведомлений: все
+        лоты разом уехали бы в Telegram повторно.
+        """
+        known = {row["name"] for row in self.conn.execute("PRAGMA table_info(lots)")}
+        if not known:  # таблицы нет — её только что создал executescript
+            return
+        for column, sql_type in _schema_columns():
+            if column not in known:
+                log.info("миграция базы: добавляю колонку lots.%s", column)
+                self.conn.execute(f"ALTER TABLE lots ADD COLUMN {column} {sql_type}")
 
     def __enter__(self) -> "Storage":
         return self
