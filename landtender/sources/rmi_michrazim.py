@@ -53,6 +53,7 @@ from ..places import code_for as code_for_place
 from ..places import matches as place_matches
 from ..places import resolve as resolve_places
 from ..money import choose_price
+from ..landuse import classify as classify_landuse
 from ..renewal import classify as classify_renewal
 from ..units import resolve_units, units_from_record
 from .base import Source
@@ -278,6 +279,7 @@ def _tender_level_lot(meta: dict[str, Any], raw: dict[str, Any]) -> Lot:
         units_basis=basis,
         renewal_kind=renewal_kind,
         has_structure=has_structure,
+        land_use=classify_landuse(meta.get("purpose"), meta.get("tender_name")),
         published_date=meta["published_date"],
         closing_date=meta["closing_date"],
         committee_date=meta["committee_date"],
@@ -428,12 +430,15 @@ def _lots_from_details(
 
         # Пустой это участок или площадка со старым строением под снос
         built_area = to_float(pick(node, BUILD_AREA_KEYS))
+        comments = clean_text(pick(node, ("Divur", "Comments", "Teur", "הערות")))
         renewal_kind, has_structure = classify_renewal(
             purpose=purpose,
             tender_name=meta.get("tender_name"),
-            comments=clean_text(pick(node, ("Divur", "Comments", "Teur", "הערות"))),
+            comments=comments,
             built_area=built_area,
         )
+        # Назначение участка первым: поле тендера бывает обобщённым.
+        land_use = classify_landuse(purpose, comments, meta.get("tender_name"))
 
         yield Lot(
             source=RmiMichrazimSource.name,
@@ -453,6 +458,7 @@ def _lots_from_details(
             built_area_sqm=built_area,
             renewal_kind=renewal_kind,
             has_structure=has_structure,
+            land_use=land_use,
             units=units,
             units_basis=basis,
             price_nis=price_nis,

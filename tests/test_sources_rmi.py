@@ -390,6 +390,45 @@ class TestCache:
         assert len(detail_calls) == 3
 
 
+class TestLandUse:
+    """Сельхозземля должна быть опознана и в поиске, и в деталях."""
+
+    def test_purpose_code_for_agriculture_marks_the_lot(self):
+        routes = dict(ROUTES, **{
+            "SearchApi/Search": [{"MichrazID": 1, "KodYeudMichraz": 5}],
+            "MichrazDetailsApi/Get": {
+                "MichrazID": 1,
+                "Tik": [{"TikID": "A", "Shetach": 145_000, "MechirSaf": 2_900_000}],
+            },
+        })
+        lot = next(iter(make_source(routes).fetch()))
+        assert lot.purpose == "חקלאות"
+        assert lot.land_use == "agriculture"
+
+    def test_plot_purpose_beats_tender_purpose(self):
+        routes = dict(ROUTES, **{
+            "SearchApi/Search": [{"MichrazID": 1, "KodYeudMichraz": 1}],
+            "MichrazDetailsApi/Get": {
+                "MichrazID": 1,
+                "Tik": [
+                    {"TikID": "A", "Yeud": "מטעים", "Shetach": 90_000, "MechirSaf": 1_200_000}
+                ],
+            },
+        })
+        assert next(iter(make_source(routes).fetch())).land_use == "agriculture"
+
+    def test_tender_without_details_is_classified_too(self):
+        routes = dict(ROUTES, **{
+            "SearchApi/Search": [{"MichrazID": 1, "MichrazName": "מכרז לקרקע חקלאית"}],
+            "MichrazDetailsApi/Get": {},
+        })
+        assert next(iter(make_source(routes).fetch())).land_use == "agriculture"
+
+    def test_residential_lot_is_not_marked_as_farmland(self):
+        lots = list(make_source(ROUTES).fetch())
+        assert all(lot.land_use != "agriculture" for lot in lots)
+
+
 class TestCodeTables:
     def test_unknown_code_leaves_field_empty_instead_of_guessing(self):
         routes = dict(ROUTES, **{"SearchApi/Search": [{"MichrazID": 1, "KodYeudMichraz": 99}]})

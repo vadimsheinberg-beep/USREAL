@@ -58,6 +58,8 @@ class Lot:
     renewal_kind: str | None = None
     #: Есть ли на участке строение. None — неизвестно.
     has_structure: bool | None = None
+    #: Назначение земли: сельхоз, жильё, промышленность… (см. landuse.py).
+    land_use: str | None = None
     units: int | None = None
     units_basis: str | None = None
 

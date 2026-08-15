@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from .landuse import AGRICULTURE
 from .models import (
     PRICE_KIND_ASKING,
     PRICE_KIND_FINAL,
@@ -30,7 +31,7 @@ FX_RATE = 3.6412
 
 
 def _demo_lots() -> list[Lot]:
-    """Шесть лотов, покрывающих все ветки отчёта, включая реконструкцию."""
+    """Лоты на все ветки отчёта: цена, реконструкция, сельхозземля, пустые поля."""
     return [
         Lot(
             source="rmi_michrazim",
@@ -118,6 +119,21 @@ def _demo_lots() -> list[Lot]:
             development_costs_nis=7_100_000.0,
             guarantee_nis=2_400_000.0,
             closing_date="2026-10-20",
+        ),
+        Lot(
+            source="rmi_michrazim",
+            source_id="demo:7",
+            tender_id="20250151",
+            tender_name="מכרז חקלאי 151/2026",
+            url="https://apps.land.gov.il/MichrazimSite/",
+            settlement="בקעת בית שאן",
+            purpose="חקלאות — מטעים",
+            status="פתוח",
+            land_use=AGRICULTURE,
+            area_sqm=145_000.0,
+            price_nis=2_900_000.0,
+            price_kind=PRICE_KIND_MIN,
+            closing_date="2026-11-05",
         ),
         Lot(
             source="gov_mr",

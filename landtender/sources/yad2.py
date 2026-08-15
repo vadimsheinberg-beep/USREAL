@@ -15,6 +15,7 @@ import logging
 from typing import Any, Iterable
 
 from ..extract import as_list, clean_text, to_float, to_iso_date, walk_dicts
+from ..landuse import classify as classify_landuse
 from ..models import PRICE_KIND_ASKING, Lot
 from ..units import resolve_units
 from .base import Source
@@ -133,6 +134,7 @@ def _item_to_lot(item: dict[str, Any], property_type: int) -> Lot | None:
         region=clean_text(item.get("area_text") or item.get("region")),
         purpose=clean_text(item.get("HomeTypeID_text") or item.get("property_type")) or f"yad2:{property_type}",
         area_sqm=area,
+        land_use=classify_landuse(title, subtitle),
         units=units,
         units_basis=basis,
         price_nis=price,

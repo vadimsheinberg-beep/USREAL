@@ -176,6 +176,21 @@ class TestNoPriceSplit:
         text = "\n".join(build_telegram_digest(res, 1_000_000, split_by_threshold=False))
         assert "со строениями: 1" in text
 
+    def test_farmland_is_counted_in_the_title(self):
+        res = result(new_lots=[lot(land_use="agriculture"), lot(source_id="2")])
+        text = "\n".join(build_telegram_digest(res, 1_000_000, split_by_threshold=False))
+        assert "сельхоз: 1" in text
+
+    def test_farmland_gets_a_badge_and_a_header_line(self):
+        res = result(new_lots=[lot(land_use="agriculture", area_sqm=145_000.0)])
+        text = "\n".join(build_telegram_digest(res, 1_000_000, split_by_threshold=False))
+        assert "🌾 сельхоз" in text
+        assert "🌾 Сельхозземля: 1 лот(ов), всего 14.5 га" in text
+
+    def test_farmland_header_line_absent_without_farmland(self):
+        text = "\n".join(build_telegram_digest(self.res(), 1_000_000, split_by_threshold=False))
+        assert "Сельхозземля" not in text
+
     def test_split_still_works_when_enabled(self):
         text = "\n".join(build_telegram_digest(self.res(), 1_000_000, split_by_threshold=True))
         assert "Дороже порога" in text

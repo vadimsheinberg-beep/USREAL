@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 from .models import TIER_PREMIUM, TIER_STANDARD, TIER_UNKNOWN, Lot, RunResult
+from .landuse import AGRICULTURE
+from .landuse import badge as landuse_badge
 from .renewal import badge as renewal_badge
 
 TIER_TITLES = {
@@ -87,6 +89,9 @@ def _lot_line_html(lot: Lot) -> str:
         parts.append("  🏦 " + " · ".join(extra))
 
     tail = []
+    field = landuse_badge(lot.land_use)
+    if field:
+        tail.append(field)
     mark = renewal_badge(lot.renewal_kind)
     if mark:
         area = f", застройка {lot.built_area_sqm:,.0f} м²".replace(",", " ") if lot.built_area_sqm else ""
@@ -153,6 +158,14 @@ def build_telegram_digest(
     renewal = [lot for lot in result.new_lots if lot.renewal_kind]
     if renewal:
         header.append(f"🏚 Со строениями / под реконструкцию: {len(renewal)}")
+    farmland = [lot for lot in result.new_lots if lot.land_use == AGRICULTURE]
+    if farmland:
+        hectares = sum(lot.area_sqm or 0 for lot in farmland) / 10_000
+        # Разделитель разрядов меняем только внутри числа: запятая перед
+        # «всего» — часть фразы, её трогать нельзя.
+        amount = f"{hectares:,.1f}".replace(",", " ")
+        size = f", всего {amount} га" if hectares else ""
+        header.append(f"🌾 Сельхозземля: {len(farmland)} лот(ов){size}")
     blocks.append("\n".join(header))
 
     if split_by_threshold:
@@ -173,6 +186,9 @@ def build_telegram_digest(
         )
         if structures:
             title += f", со строениями: {structures}"
+        farm = sum(1 for lot in lots if lot.land_use == AGRICULTURE)
+        if farm:
+            title += f", сельхоз: {farm}"
         lines = [title]
         for lot in lots[:max_per_tier]:
             lines.append(_lot_line_html(lot))
@@ -271,7 +287,7 @@ def build_console_report(
 EXPORT_FIELDS = (
     "uid", "source", "tender_id", "tender_name", "settlement", "neighborhood",
     "gush", "chelka", "purpose", "status", "area_sqm", "built_area_sqm", "renewal_kind",
-    "has_structure", "units", "units_basis",
+    "has_structure", "land_use", "units", "units_basis",
     "price_nis", "price_kind", "development_costs_nis", "guarantee_nis", "price_usd", "price_per_unit_usd", "price_per_sqm_usd",
     "tier", "published_date", "closing_date", "url",
 )

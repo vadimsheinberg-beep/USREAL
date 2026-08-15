@@ -17,6 +17,7 @@ from html.parser import HTMLParser
 from typing import Iterable
 
 from ..extract import clean_text, to_float, to_iso_date
+from ..landuse import classify as classify_landuse
 from ..models import PRICE_KIND_MIN, Lot
 from ..units import resolve_units
 from .base import Source
@@ -142,6 +143,7 @@ def _item_to_lot(item: dict[str, str]) -> Lot | None:
         source_id=source_id,
         tender_name=text[:200],
         url=url,
+        land_use=classify_landuse(text),
         units=units,
         units_basis=basis,
         price_nis=price,

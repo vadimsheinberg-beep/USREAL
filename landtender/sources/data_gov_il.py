@@ -34,6 +34,7 @@ from ..extract import (
     to_iso_date,
 )
 from ..http import HttpError
+from ..landuse import classify as classify_landuse
 from ..models import Lot
 from ..money import choose_price
 from ..units import resolve_units
@@ -153,6 +154,7 @@ def _row_to_lot(row: dict[str, Any], resource_id: str, package_name: str) -> Lot
         purpose=clean_text(pick(row, PURPOSE_KEYS)),
         status=clean_text(pick(row, STATUS_KEYS)),
         area_sqm=to_float(pick(row, AREA_KEYS)),
+        land_use=classify_landuse(clean_text(pick(row, PURPOSE_KEYS)), name),
         units=units,
         units_basis=basis,
         price_nis=price_nis,
