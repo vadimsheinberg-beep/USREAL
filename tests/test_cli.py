@@ -201,6 +201,59 @@ class TestTelegramTestCommand:
         assert sent == []
 
 
+class FarmSource(Source):
+    name = "fake"
+    title = "тестовый источник"
+
+    def fetch(self):
+        return [
+            Lot(source="fake", source_id="1", tender_name="מכרז חקלאי",
+                purpose="חקלאות", area_sqm=145_000.0, price_nis=2_900_000.0,
+                closing_date="2099-01-01"),
+            Lot(source="fake", source_id="2", tender_name="מכרז מגורים",
+                purpose="מגורים", price_nis=18_500_000.0, closing_date="2099-01-01"),
+        ]
+
+
+class TestFarmlandCommand:
+    """«Покажи всю сельхозземлю» — срез базы, а не дневная сводка."""
+
+    @pytest.fixture(autouse=True)
+    def farm_source(self, monkeypatch):
+        monkeypatch.setattr(pipeline, "SOURCES_BY_NAME", {"fake": FarmSource})
+        monkeypatch.setattr(cli, "SOURCES_BY_NAME", {"fake": FarmSource})
+
+    def fill(self, config_file):
+        cli.main(["--config", str(config_file), "run", "--sources", "fake", "--no-notify"])
+
+    def test_lists_only_agricultural_lots(self, config_file, capsys):
+        self.fill(config_file)
+        capsys.readouterr()
+        assert cli.main(["--config", str(config_file), "farmland"]) == 0
+        out = capsys.readouterr().out
+        assert "Лотов: 1" in out
+        assert "מכרז חקלאי" in out
+        assert "מכרז מגורים" not in out
+
+    def test_reports_total_area(self, config_file, capsys):
+        self.fill(config_file)
+        capsys.readouterr()
+        cli.main(["--config", str(config_file), "farmland"])
+        assert "площадь: 14.5 га" in capsys.readouterr().out
+
+    def test_empty_database_says_nothing_found(self, config_file, capsys):
+        assert cli.main(["--config", str(config_file), "farmland"]) == 0
+        assert "Ничего не найдено" in capsys.readouterr().out
+
+    def test_csv_export(self, config_file, tmp_path, capsys):
+        self.fill(config_file)
+        out = tmp_path / "farm.csv"
+        cli.main(["--config", str(config_file), "farmland", "--out", str(out)])
+        text = out.read_text("utf-8")
+        assert "agriculture" in text
+        assert "מכרז מגורים" not in text
+
+
 def test_stats_command_reports_empty_database(config_file, capsys):
     assert cli.main(["--config", str(config_file), "stats"]) == 0
     assert "Запусков ещё не было" in capsys.readouterr().out

@@ -6,6 +6,7 @@ from landtender.models import TIER_PREMIUM, TIER_STANDARD, TIER_UNKNOWN, Lot, Ru
 from landtender.notify.telegram import chunk_blocks
 from landtender.report import (
     build_console_report,
+    build_farmland_digest,
     build_telegram_digest,
     export_csv,
     export_json,
@@ -246,3 +247,41 @@ def test_console_report_lists_sources_and_tiers():
     assert "rmi_michrazim" in text
     assert "Дороже порога" in text
     assert "Курс USD/ILS: 3.6412" in text
+
+
+class TestFarmlandDigest:
+    """Срез базы по сельхозземле — ответ на «покажи всю сельхозземлю»."""
+
+    def farm(self, **overrides):
+        data = dict(land_use="agriculture", area_sqm=145_000.0, purpose="חקלאות")
+        data.update(overrides)
+        return lot(**data)
+
+    def test_empty_base_says_so_instead_of_a_blank_message(self):
+        text = "\n".join(build_farmland_digest([]))
+        assert "Ничего не найдено" in text
+
+    def test_counts_lots_and_hectares(self):
+        text = "\n".join(build_farmland_digest([self.farm(), self.farm(source_id="2")]))
+        assert "Лотов: 2 · площадь: 29.0 га" in text
+
+    def test_priced_lots_are_summed(self):
+        lots = [self.farm(), self.farm(source_id="2", price_usd=None)]
+        text = "\n".join(build_farmland_digest(lots))
+        assert "С ценой: 1 на $5.08 млн" in text
+
+    def test_scope_is_stated(self):
+        active = "\n".join(build_farmland_digest([self.farm()], only_active=True))
+        whole = "\n".join(build_farmland_digest([self.farm()], only_active=False))
+        assert "действующие тендеры" in active
+        assert "включая закрытые" in whole
+
+    def test_long_lists_are_truncated(self):
+        lots = [self.farm(source_id=str(i)) for i in range(10)]
+        text = "\n".join(build_farmland_digest(lots, max_lots=3))
+        assert "…и ещё 7" in text
+
+    def test_expensive_first(self):
+        lots = [self.farm(price_usd=2_000.0), self.farm(source_id="2", price_usd=7_000_000.0)]
+        body = build_farmland_digest(lots)[1]
+        assert body.index("$7.00 млн") < body.index("$2 000")

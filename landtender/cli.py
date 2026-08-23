@@ -15,8 +15,22 @@ from pathlib import Path
 
 from .config import load_config
 from .models import TIER_PREMIUM, TIER_STANDARD, TIER_UNKNOWN
-from .pipeline import notify, open_storage, probe_sources, run_once, stored_lots
-from .report import build_console_report, export_csv, export_json, preview_messages
+from .pipeline import (
+    backfill_land_use,
+    farmland_lots,
+    notify,
+    open_storage,
+    probe_sources,
+    run_once,
+    stored_lots,
+)
+from .report import (
+    build_console_report,
+    build_farmland_digest,
+    export_csv,
+    export_json,
+    preview_messages,
+)
 from .sources import SOURCES_BY_NAME
 
 log = logging.getLogger("landtender")
@@ -62,6 +76,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--tier", choices=(TIER_PREMIUM, TIER_STANDARD, TIER_UNKNOWN), help="только одна группа"
     )
     export_cmd.add_argument("--days", type=int, help="только лоты, впервые увиденные за N дней")
+
+    farm_cmd = sub.add_parser(
+        "farmland", help="вся сельхозземля, доступная на тендерах (срез базы)"
+    )
+    farm_cmd.add_argument(
+        "--all", action="store_true", help="включая тендеры с истёкшим сроком подачи"
+    )
+    farm_cmd.add_argument("--send", action="store_true", help="отправить сводку в Telegram")
+    farm_cmd.add_argument("--out", help="сохранить список в CSV")
+    farm_cmd.add_argument("--limit", type=int, default=60, help="сколько лотов показать")
 
     sub.add_parser("stats", help="показать состояние базы и последний запуск")
 
@@ -293,6 +317,40 @@ def cmd_telegram_test(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_farmland(args: argparse.Namespace) -> int:
+    """Показывает всю сельхозземлю из базы, а не только новую за сегодня."""
+    from .notify import TelegramError, TelegramNotifier
+
+    config = load_config(args.config)
+    with open_storage(config, args.db) as storage:
+        # База могла накопиться до появления разбора назначения — доразбираем
+        backfill_land_use(storage)
+        lots = farmland_lots(storage, only_active=not args.all)
+
+    blocks = build_farmland_digest(lots, max_lots=args.limit, only_active=not args.all)
+
+    if args.out:
+        export_csv(lots, Path(args.out))
+        print(f"CSV: {args.out}")
+
+    if not args.send:
+        print(preview_messages(blocks))
+        return 0
+
+    token = config.get("telegram", "bot_token")
+    chat_id = config.get("telegram", "chat_id")
+    if not token or not chat_id:
+        print("✗ Нет токена или канала. Запустите: landtender setup")
+        return 2
+    try:
+        sent = TelegramNotifier(bot_token=str(token), chat_id=str(chat_id)).send_blocks(blocks)
+    except TelegramError as exc:
+        print(f"✗ Отправка не прошла: {exc}")
+        return 1
+    print(f"✓ Сводка по сельхозземле отправлена ({sent} сообщ.): лотов {len(lots)}")
+    return 0
+
+
 def cmd_stats(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     with open_storage(config, args.db) as storage:
@@ -328,6 +386,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_run(args)
     if command == "check":
         return cmd_check(args)
+    if command == "farmland":
+        return cmd_farmland(args)
     if command == "export":
         return cmd_export(args)
     if command == "stats":

@@ -227,6 +227,15 @@ class Storage:
         with closing(self.conn.execute(query, params)) as cur:
             yield from cur.fetchall()
 
+    def iter_unclassified(self) -> list[sqlite3.Row]:
+        """Лоты без разобранного назначения — их классифицируем задним числом."""
+        return self.conn.execute(
+            "SELECT uid, purpose, tender_name FROM lots WHERE land_use IS NULL"
+        ).fetchall()
+
+    def set_land_use(self, uid: str, land_use: str) -> None:
+        self.conn.execute("UPDATE lots SET land_use = ? WHERE uid = ?", (land_use, uid))
+
     def count_lots(self) -> int:
         return int(self.conn.execute("SELECT COUNT(*) FROM lots").fetchone()[0])
 

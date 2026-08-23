@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+from datetime import date
 from html import escape
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -209,6 +210,43 @@ def build_telegram_digest(
             lines.append(f"• {escape(source.name)}: {escape(source.error or 'неизвестная ошибка')}")
         blocks.append("\n".join(lines))
 
+    return blocks
+
+
+def build_farmland_digest(
+    lots: Sequence[Lot],
+    max_lots: int = 60,
+    only_active: bool = True,
+) -> list[str]:
+    """Сводка по всей сельхозземле в базе — ответ на «покажи всю сельхозземлю».
+
+    Дневной дайджест по устройству показывает только новое, поэтому земля,
+    найденная неделю назад, в него уже не попадёт. Здесь наоборот: срез базы
+    целиком, отсортированный по цене.
+    """
+    scope = "действующие тендеры" if only_active else "вся база, включая закрытые"
+    if not lots:
+        return [f"🌾 <b>Сельхозземля на тендерах</b>\nНичего не найдено ({scope})."]
+
+    hectares = sum(lot.area_sqm or 0 for lot in lots) / 10_000
+    priced = [lot for lot in lots if lot.price_usd]
+    header = [
+        "🌾 <b>Сельхозземля на тендерах</b>",
+        f"Дата: {date.today().isoformat()} · {scope}",
+        f"Лотов: {len(lots)} · площадь: {hectares:,.1f} га".replace(",", " "),
+    ]
+    if priced:
+        total = sum(lot.price_usd or 0 for lot in priced)
+        header.append(f"С ценой: {len(priced)} на {fmt_usd(total)}")
+
+    blocks = ["\n".join(header)]
+    ordered = sort_by_price(lots)
+    lines = []
+    for lot in ordered[:max_lots]:
+        lines.append(_lot_line_html(lot))
+    if len(ordered) > max_lots:
+        lines.append(f"…и ещё {len(ordered) - max_lots}")
+    blocks.append("\n".join(lines))
     return blocks
 
 

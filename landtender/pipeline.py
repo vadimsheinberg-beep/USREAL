@@ -76,6 +76,7 @@ def run_once(
 ) -> RunResult:
     """Один ежедневный проход. Падение источника не роняет запуск."""
     started_at = utcnow_iso()
+    backfill_land_use(storage)
     http = build_http(config)
 
     fx = get_fx(config, http)
@@ -263,6 +264,41 @@ def probe_sources(config: Config, only_sources: Sequence[str] | None = None) -> 
 
 def open_storage(config: Config, db_path: str | Path | None = None) -> Storage:
     return Storage(Path(db_path) if db_path else config.db_path)
+
+
+def backfill_land_use(storage: Storage) -> int:
+    """Проставляет назначение лотам, попавшим в базу до появления колонки.
+
+    Иначе сельхозземля, найденная в прошлые запуски, осталась бы неопознанной
+    навсегда: повторно увиденный лот с тем же содержимым в базу не переписывается.
+    """
+    from .landuse import classify as classify_landuse
+
+    filled = 0
+    for row in storage.iter_unclassified():
+        land_use = classify_landuse(row["purpose"], row["tender_name"])
+        if land_use:
+            storage.set_land_use(row["uid"], land_use)
+            filled += 1
+    if filled:
+        storage.commit()
+        log.info("Назначение земли проставлено задним числом: %d лот(ов)", filled)
+    return filled
+
+
+def farmland_lots(storage: Storage, only_active: bool = True) -> list[Lot]:
+    """Вся сельхозземля из базы — не только найденная сегодня.
+
+    Дневная сводка показывает лишь новое, поэтому «покажи всю сельхозземлю»
+    отдельным вопросом к базе и отвечаем.
+    """
+    from .landuse import AGRICULTURE
+
+    today = date.today().isoformat()
+    lots = [lot for lot in stored_lots(storage) if lot.land_use == AGRICULTURE]
+    if only_active:
+        lots = [lot for lot in lots if not is_expired(lot, today)]
+    return lots
 
 
 def stored_lots(storage: Storage, tier: str | None = None, since: str | None = None) -> list[Lot]:

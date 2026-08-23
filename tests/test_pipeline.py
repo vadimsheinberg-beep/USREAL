@@ -305,3 +305,56 @@ def test_stored_lots_roundtrip(storage):
     assert len(restored) == 1
     assert restored[0].units == 60
     assert restored[0].tier == TIER_PREMIUM
+
+
+class TestLandUseBackfill:
+    """Лоты, попавшие в базу до появления разбора назначения."""
+
+    def seed(self, storage, **overrides):
+        data = dict(purpose="חקלאות", tender_name="מכרז חקלאי", closing_date="2099-01-01")
+        data.update(overrides)
+        storage.upsert_lot(lot(**data), "2026-08-01")
+        storage.commit()
+
+    def test_missing_land_use_is_filled_in(self, storage):
+        self.seed(storage)
+        assert pipeline.backfill_land_use(storage) == 1
+        assert storage.get_lot_row("fake:1")["land_use"] == "agriculture"
+
+    def test_second_pass_has_nothing_left_to_do(self, storage):
+        self.seed(storage)
+        pipeline.backfill_land_use(storage)
+        assert pipeline.backfill_land_use(storage) == 0
+
+    def test_unrecognizable_purpose_stays_empty(self, storage):
+        self.seed(storage, purpose="מכרז 42", tender_name="מכרז 42")
+        assert pipeline.backfill_land_use(storage) == 0
+        assert storage.get_lot_row("fake:1")["land_use"] is None
+
+    def test_run_backfills_before_collecting(self, storage):
+        self.seed(storage)
+        FakeSource.batches = [[]]
+        pipeline.run_once(make_config(), storage, only_sources=["fake"])
+        assert storage.get_lot_row("fake:1")["land_use"] == "agriculture"
+
+
+class TestFarmlandLots:
+    def seed(self, storage, source_id, purpose, closing_date):
+        storage.upsert_lot(
+            lot(source_id=source_id, purpose=purpose, closing_date=closing_date), "2026-08-01"
+        )
+        storage.commit()
+        pipeline.backfill_land_use(storage)
+
+    def test_only_agricultural_lots_are_returned(self, storage):
+        self.seed(storage, "1", "חקלאות", "2099-01-01")
+        self.seed(storage, "2", "מגורים", "2099-01-01")
+        assert [l.source_id for l in pipeline.farmland_lots(storage)] == ["1"]
+
+    def test_expired_tenders_are_hidden_by_default(self, storage):
+        self.seed(storage, "1", "חקלאות", "2000-01-01")
+        assert pipeline.farmland_lots(storage) == []
+
+    def test_expired_tenders_can_be_included(self, storage):
+        self.seed(storage, "1", "חקלאות", "2000-01-01")
+        assert len(pipeline.farmland_lots(storage, only_active=False)) == 1
