@@ -14,6 +14,10 @@ on:
         description: "Прислать в канал срез по всей сельхозземле"
         type: boolean
         default: false
+      full_refresh:
+        description: "Перезабрать детали всех тендеров (цены и площади)"
+        type: boolean
+        default: false
 
 concurrency:
   group: landtender-daily
@@ -70,9 +74,11 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           # Контекст inputs пуст при запуске по расписанию — приводим к флагу в shell
           DRY_RUN: ${{ github.event.inputs.dry_run }}
+          FULL_REFRESH: ${{ github.event.inputs.full_refresh }}
         run: |
           flags=""
-          [ "$DRY_RUN" = "true" ] && flags="--dry-run"
+          [ "$DRY_RUN" = "true" ] && flags="$flags --dry-run"
+          [ "$FULL_REFRESH" = "true" ] && flags="$flags --full-refresh"
           landtender run $flags --export-csv "data/new-$(date +%F).csv"
 
       - name: Сельхозземля — срез всей базы
