@@ -133,7 +133,24 @@ def _demo_lots() -> list[Lot]:
             area_sqm=145_000.0,
             price_nis=2_900_000.0,
             price_kind=PRICE_KIND_MIN,
+            opening_date="2026-10-12",
             closing_date="2026-11-05",
+        ),
+        Lot(
+            source="rmi_michrazim",
+            source_id="demo:8",
+            tender_id="20250406",
+            tender_name="406/2025",
+            url="https://apps.land.gov.il/MichrazimSite/",
+            settlement="ירושלים",
+            neighborhood="הכניסה לעיר",
+            purpose="חקלאות",
+            status="פתוח",
+            land_use=AGRICULTURE,
+            # Тендер объявлен, но приём заявок ещё не начался — портал держит
+            # מחיר מינימום пустым до открытия. Так это и выглядит в сводке.
+            opening_date="2026-10-26",
+            closing_date="2026-12-28",
         ),
         Lot(
             source="gov_mr",

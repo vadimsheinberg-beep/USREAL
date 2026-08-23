@@ -312,3 +312,56 @@ class TestFmtArea:
         header = build_farmland_digest([farm])[0]
         assert "Лотов: 1" in header
         assert "площадь" not in header
+
+
+class TestChangeLineNeverEmpty:
+    """Лот меняется по более широкому набору полей, чем расписывается построчно."""
+
+    def test_untracked_change_still_says_something(self):
+        changed = [(lot(), {})]
+        text = "\n".join(build_telegram_digest(result(changed_lots=changed), 1_000_000))
+        assert "♻️ обновлены данные тендера" in text
+
+    def test_shekel_only_change_is_not_a_blank_line(self):
+        changed = [(lot(), {"price_nis": {"before": 1.0, "after": 2.0}})]
+        text = "\n".join(build_telegram_digest(result(changed_lots=changed), 1_000_000))
+        assert "♻️ обновлены данные тендера" in text
+
+    def test_tracked_change_is_still_spelled_out(self):
+        changed = [(lot(), {"price_usd": {"before": 5_080_742.0, "after": 4_000_000.0}})]
+        text = "\n".join(build_telegram_digest(result(changed_lots=changed), 1_000_000))
+        assert "цена $5.08 млн → $4.00 млн" in text
+        assert "обновлены данные" not in text
+
+
+class TestOpeningDate:
+    """Цены нет не по нашей вине: тендер объявлен, но приём заявок не начат."""
+
+    def unopened(self):
+        return lot(price_nis=None, price_usd=None, price_kind=None,
+                   opening_date="2026-10-26", closing_date="2026-12-28")
+
+    def test_empty_price_explains_itself(self):
+        text = "\n".join(build_telegram_digest(result(new_lots=[self.unopened()]), 1_000_000))
+        assert "💰 — · цена будет с 2026-10-26" in text
+
+    def test_dates_are_shown_as_a_window(self):
+        text = "\n".join(build_telegram_digest(result(new_lots=[self.unopened()]), 1_000_000))
+        assert "заявки 2026-10-26 — 2026-12-28" in text
+
+    def test_priced_lot_keeps_its_price_kind(self):
+        priced = lot(opening_date="2026-10-26", closing_date="2026-12-28")
+        text = "\n".join(build_telegram_digest(result(new_lots=[priced]), 1_000_000))
+        assert "$5.08 млн (18 500 000 ₪) · min" in text
+        assert "цена будет с" not in text
+
+    def test_without_opening_date_nothing_changes(self):
+        plain = lot(price_nis=None, price_usd=None, price_kind=None, closing_date="2026-12-28")
+        text = "\n".join(build_telegram_digest(result(new_lots=[plain]), 1_000_000))
+        assert "💰 —" in text
+        assert "цена будет" not in text
+        assert "до 2026-12-28" in text
+
+    def test_opening_date_is_exported(self, tmp_path):
+        path = export_csv([self.unopened()], tmp_path / "out.csv")
+        assert "2026-10-26" in path.read_text("utf-8")

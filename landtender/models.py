@@ -80,6 +80,8 @@ class Lot:
 
     # Даты (ISO-строки, чтобы одинаково жить в SQLite и в JSON)
     published_date: str | None = None
+    #: Когда открывается приём заявок. Раньше этой даты цены у тендера нет.
+    opening_date: str | None = None
     closing_date: str | None = None
     committee_date: str | None = None
 
@@ -113,6 +115,7 @@ class Lot:
             self.price_kind,
             self.development_costs_nis,
             self.published_date,
+            self.opening_date,
             self.closing_date,
             self.committee_date,
         )

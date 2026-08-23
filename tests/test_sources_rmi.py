@@ -454,3 +454,32 @@ def test_active_only_option_reaches_payload():
     list(source.fetch())
     _, _, kwargs = source.ctx.http.calls[0]
     assert kwargs["json"]["ActiveMichraz"] is True
+
+
+class TestOpeningDate:
+    """PtichaDate — когда открывается приём заявок; до неё цены у портала нет."""
+
+    ROUTES_UNOPENED = {
+        "SearchApi/Search": [{"MichrazID": 1, "PtichaDate": "2026-10-26T00:00:00+02:00",
+                              "SgiraDate": "2026-12-28T12:00:00+02:00"}],
+        "MichrazDetailsApi/Get": {},
+    }
+
+    def test_read_from_the_tender(self):
+        lot = next(iter(make_source(self.ROUTES_UNOPENED).fetch()))
+        assert lot.opening_date == "2026-10-26"
+        assert lot.closing_date == "2026-12-28"
+
+    def test_plots_inherit_it(self):
+        routes = dict(self.ROUTES_UNOPENED, **{
+            "MichrazDetailsApi/Get": {
+                "MichrazID": 1,
+                "Tik": [{"TikID": "A", "Shetach": 900, "MechirSaf": 5_000_000}],
+            },
+        })
+        lot = next(iter(make_source(routes).fetch()))
+        assert lot.opening_date == "2026-10-26"
+
+    def test_missing_field_stays_empty(self):
+        lot = next(iter(make_source(ROUTES).fetch()))
+        assert lot.opening_date is None

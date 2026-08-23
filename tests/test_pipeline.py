@@ -399,3 +399,33 @@ class TestCollapsePlaceholders:
         storage.upsert_lot(self.plot(), "2026-08-01")
         storage.commit()
         assert len(pipeline.stored_lots(storage)) == 1
+
+
+class TestStaleLandUseIsCorrected:
+    """Значение, проставленное прошлой версией разбора, надо снимать."""
+
+    def seed_built(self, storage):
+        storage.upsert_lot(
+            lot(purpose="זאב חקלאי", tender_name="זאב חקלאי", renewal_kind="pinui_binui"),
+            "2026-08-01",
+        )
+        storage.commit()
+        # прошлая версия разбора не знала про вид работ
+        storage.set_land_use("fake:1", "agriculture")
+        storage.commit()
+
+    def test_backfill_clears_it(self, storage):
+        self.seed_built(storage)
+        pipeline.backfill_land_use(storage)
+        assert storage.get_lot_row("fake:1")["land_use"] is None
+
+    def test_farmland_no_longer_lists_it(self, storage):
+        self.seed_built(storage)
+        pipeline.backfill_land_use(storage)
+        assert pipeline.farmland_lots(storage, only_active=False) == []
+
+    def test_real_farmland_is_untouched(self, storage):
+        storage.upsert_lot(lot(source_id="2", purpose="קרקע חקלאית"), "2026-08-01")
+        storage.commit()
+        pipeline.backfill_land_use(storage)
+        assert storage.get_lot_row("fake:2")["land_use"] == "agriculture"

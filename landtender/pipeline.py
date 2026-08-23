@@ -274,6 +274,10 @@ def backfill_land_use(storage: Storage) -> int:
     """
     from .landuse import classify_lot as classify_landuse
 
+    dropped = storage.clear_land_use_on_built_land()
+    if dropped:
+        log.info("Назначение снято с застроенных площадок: %d лот(ов)", dropped)
+
     filled = 0
     for row in storage.iter_unclassified():
         land_use = classify_landuse(
@@ -283,8 +287,9 @@ def backfill_land_use(storage: Storage) -> int:
             storage.set_land_use(row["uid"], land_use)
             filled += 1
     if filled:
-        storage.commit()
         log.info("Назначение земли проставлено задним числом: %d лот(ов)", filled)
+    if filled or dropped:
+        storage.commit()
     return filled
 
 

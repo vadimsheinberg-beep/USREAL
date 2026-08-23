@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS lots (
     price_per_sqm_usd      REAL,
     tier                   TEXT,
     published_date         TEXT,
+    opening_date           TEXT,
     closing_date           TEXT,
     committee_date         TEXT,
     content_hash           TEXT NOT NULL,
@@ -102,7 +103,7 @@ _LOT_COLUMNS = (
     "renewal_kind", "has_structure", "land_use", "units", "units_basis",
     "price_nis", "price_kind", "development_costs_nis", "guarantee_nis", "price_usd",
     "fx_rate", "fx_date", "price_per_unit_usd", "price_per_sqm_usd", "tier",
-    "published_date", "closing_date", "committee_date",
+    "published_date", "opening_date", "closing_date", "committee_date",
     "content_hash", "first_seen", "last_seen",
 )
 
@@ -235,6 +236,19 @@ class Storage:
 
     def set_land_use(self, uid: str, land_use: str) -> None:
         self.conn.execute("UPDATE lots SET land_use = ? WHERE uid = ?", (land_use, uid))
+
+    def clear_land_use_on_built_land(self) -> int:
+        """Снимает назначение с площадок под снос и расселение.
+
+        Инвариант: у лота с видом работ назначения земли нет. Значение могло
+        попасть туда прошлой версией разбора — тогда «זאב חקלאי» (улица в
+        Иерусалиме) уехал в сельхозземлю вместе с 235 квартирами под снос.
+        """
+        cur = self.conn.execute(
+            "UPDATE lots SET land_use = NULL "
+            "WHERE renewal_kind IS NOT NULL AND land_use IS NOT NULL"
+        )
+        return cur.rowcount or 0
 
     def count_lots(self) -> int:
         return int(self.conn.execute("SELECT COUNT(*) FROM lots").fetchone()[0])

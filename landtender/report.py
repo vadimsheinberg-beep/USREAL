@@ -71,6 +71,10 @@ def _lot_line_html(lot: Lot) -> str:
         money += f" ({fmt_nis(lot.price_nis)})"
     if lot.price_kind:
         money += f" · {escape(lot.price_kind)}"
+    elif lot.price_nis is None and lot.opening_date:
+        # У неоткрытого тендера цены нет не по нашей вине: портал отвечает
+        # «המכרז טרם נפתח להגשת הצעות» и держит מחיר מינימום пустым до открытия.
+        money += f" · цена будет с {lot.opening_date}"
     parts.append(f"  💰 {money}")
 
     detail = [f"🏘 единиц: {fmt_units(lot)}"]
@@ -99,7 +103,9 @@ def _lot_line_html(lot: Lot) -> str:
         tail.append(f"🏚 {escape(mark)}{area}")
     if lot.purpose:
         tail.append(escape(lot.purpose))
-    if lot.closing_date:
+    if lot.opening_date and lot.closing_date:
+        tail.append(f"заявки {lot.opening_date} — {lot.closing_date}")
+    elif lot.closing_date:
         tail.append(f"до {lot.closing_date}")
     if tail:
         parts.append("  " + " · ".join(tail))
@@ -121,7 +127,10 @@ def _change_line_html(lot: Lot, changes: dict[str, Any]) -> str:
             bits.append(f"единиц {before or '—'} → {after or '—'}")
         else:
             bits.append(f"{field}: {escape(str(before))} → {escape(str(after))}")
-    return f"• {link}\n  ♻️ " + "; ".join(bits)
+    # Лот считается изменившимся по более широкому набору полей, чем мы
+    # расписываем построчно (площадь, назначение, примечания). Без этой
+    # оговорки такая строка приходила пустой: «• тендер ♻️» и всё.
+    return f"• {link}\n  ♻️ " + ("; ".join(bits) if bits else "обновлены данные тендера")
 
 
 def build_telegram_digest(
@@ -331,7 +340,7 @@ EXPORT_FIELDS = (
     "gush", "chelka", "purpose", "status", "area_sqm", "built_area_sqm", "renewal_kind",
     "has_structure", "land_use", "units", "units_basis",
     "price_nis", "price_kind", "development_costs_nis", "guarantee_nis", "price_usd", "price_per_unit_usd", "price_per_sqm_usd",
-    "tier", "published_date", "closing_date", "url",
+    "tier", "published_date", "opening_date", "closing_date", "url",
 )
 
 

@@ -214,6 +214,9 @@ TENDER_NAME_KEYS = ("MichrazName", "MisMichraz", "TenderName", "title", "שם מ
 
 PUBLISHED_KEYS = ("PirsumDate", "PublicationDate", "published", "תאריך פרסום")
 CLOSING_KEYS = ("SgiraDate", "CloseDate", "SubmissionDate", "תאריך סגירה", "מועד אחרון להגשה")
+#: Когда открывается приём заявок. До этой даты портал не публикует цену:
+#: ответ деталей отвечает «המכרז טרם נפתח להגשת הצעות», а MechirSaf пуст.
+OPENING_KEYS = ("PtichaDate", "OpeningDate", "תאריך פתיחה", "מועד פתיחת המכרז")
 COMMITTEE_KEYS = ("VaadaDate", "CommitteeDate", "תאריך ועדה", "ועדת מכרזים")
 
 #: По этим ключам определяем, что словарь описывает участок, а не служебный узел.
