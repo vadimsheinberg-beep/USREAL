@@ -34,7 +34,7 @@ from ..extract import (
     to_iso_date,
 )
 from ..http import HttpError
-from ..landuse import classify as classify_landuse
+from ..landuse import classify_lot as classify_landuse
 from ..models import Lot
 from ..money import choose_price
 from ..units import resolve_units

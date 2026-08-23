@@ -358,3 +358,44 @@ class TestFarmlandLots:
     def test_expired_tenders_can_be_included(self, storage):
         self.seed(storage, "1", "חקלאות", "2000-01-01")
         assert len(pipeline.farmland_lots(storage, only_active=False)) == 1
+
+
+class TestCollapsePlaceholders:
+    """Тендер без деталей и его же разобранные участки — один тендер, не два."""
+
+    def placeholder(self, tender_id="20250406"):
+        return lot(source_id=tender_id, tender_id=tender_id)
+
+    def plot(self, tender_id="20250406", key="10769/42"):
+        return lot(source_id=f"{tender_id}:{key}", tender_id=tender_id)
+
+    def test_placeholder_is_dropped_when_plots_exist(self):
+        kept = pipeline.collapse_placeholders([self.placeholder(), self.plot()])
+        assert [l.source_id for l in kept] == ["20250406:10769/42"]
+
+    def test_placeholder_survives_alone(self):
+        kept = pipeline.collapse_placeholders([self.placeholder()])
+        assert len(kept) == 1
+
+    def test_other_tenders_are_untouched(self):
+        lots = [self.placeholder("A"), self.plot("B", "1"), self.placeholder("B")]
+        kept = {l.source_id for l in pipeline.collapse_placeholders(lots)}
+        assert kept == {"A", "B:1"}
+
+    def test_lots_without_tender_id_are_kept(self):
+        # gov_mr не знает номера тендера — по нему группировать нечего
+        anonymous = lot(source_id="x", tender_id=None)
+        assert pipeline.collapse_placeholders([anonymous]) == [anonymous]
+
+    def test_same_id_in_another_source_is_not_confused(self):
+        lots = [
+            lot(source="fake", source_id="7", tender_id="7"),
+            lot(source="other", source_id="7:1", tender_id="7"),
+        ]
+        assert len(pipeline.collapse_placeholders(lots)) == 2
+
+    def test_stored_lots_applies_it(self, storage):
+        storage.upsert_lot(self.placeholder(), "2026-08-01")
+        storage.upsert_lot(self.plot(), "2026-08-01")
+        storage.commit()
+        assert len(pipeline.stored_lots(storage)) == 1

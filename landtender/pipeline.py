@@ -272,11 +272,13 @@ def backfill_land_use(storage: Storage) -> int:
     Иначе сельхозземля, найденная в прошлые запуски, осталась бы неопознанной
     навсегда: повторно увиденный лот с тем же содержимым в базу не переписывается.
     """
-    from .landuse import classify as classify_landuse
+    from .landuse import classify_lot as classify_landuse
 
     filled = 0
     for row in storage.iter_unclassified():
-        land_use = classify_landuse(row["purpose"], row["tender_name"])
+        land_use = classify_landuse(
+            row["purpose"], row["tender_name"], renewal_kind=row["renewal_kind"]
+        )
         if land_use:
             storage.set_land_use(row["uid"], land_use)
             filled += 1
@@ -301,6 +303,30 @@ def farmland_lots(storage: Storage, only_active: bool = True) -> list[Lot]:
     return lots
 
 
+def collapse_placeholders(lots: Sequence[Lot]) -> list[Lot]:
+    """Убирает тендер-заглушку, если по тому же тендеру есть разобранные участки.
+
+    Когда детали тендера не догружались (кеш отпечатков или исчерпанный
+    ``details_budget``), источник отдаёт один лот на весь тендер — без площади,
+    цены и участков. В базе он живёт рядом с настоящими участками того же
+    тендера, найденными в другой день, и тендер задваивается в выдаче.
+    """
+    detailed: set[tuple[str, str]] = {
+        (lot.source, lot.tender_id)
+        for lot in lots
+        if lot.tender_id and lot.source_id != lot.tender_id
+    }
+    return [
+        lot
+        for lot in lots
+        if not (
+            lot.tender_id
+            and lot.source_id == lot.tender_id
+            and (lot.source, lot.tender_id) in detailed
+        )
+    ]
+
+
 def stored_lots(storage: Storage, tier: str | None = None, since: str | None = None) -> list[Lot]:
     """Читает лоты из БД обратно в модели — для выгрузок и повторных отчётов."""
     lots: list[Lot] = []
@@ -308,4 +334,4 @@ def stored_lots(storage: Storage, tier: str | None = None, since: str | None = N
     for row in storage.iter_lots(tier=tier, since=since):
         data = {key: row[key] for key in row.keys() if key in known}
         lots.append(Lot(**data))
-    return lots
+    return collapse_placeholders(lots)

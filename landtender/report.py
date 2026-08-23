@@ -161,11 +161,8 @@ def build_telegram_digest(
         header.append(f"🏚 Со строениями / под реконструкцию: {len(renewal)}")
     farmland = [lot for lot in result.new_lots if lot.land_use == AGRICULTURE]
     if farmland:
-        hectares = sum(lot.area_sqm or 0 for lot in farmland) / 10_000
-        # Разделитель разрядов меняем только внутри числа: запятая перед
-        # «всего» — часть фразы, её трогать нельзя.
-        amount = f"{hectares:,.1f}".replace(",", " ")
-        size = f", всего {amount} га" if hectares else ""
+        area = sum(lot.area_sqm or 0 for lot in farmland)
+        size = f", всего {fmt_area(area)}" if area else ""
         header.append(f"🌾 Сельхозземля: {len(farmland)} лот(ов){size}")
     blocks.append("\n".join(header))
 
@@ -213,6 +210,13 @@ def build_telegram_digest(
     return blocks
 
 
+def fmt_area(sqm: float) -> str:
+    """Гектары для полей, метры для мелочи — «0.0 га» ничего не сообщает."""
+    if sqm >= 1_000:
+        return f"{sqm / 10_000:,.1f} га".replace(",", " ")
+    return f"{sqm:,.0f} м²".replace(",", " ")
+
+
 def build_farmland_digest(
     lots: Sequence[Lot],
     max_lots: int = 60,
@@ -228,12 +232,12 @@ def build_farmland_digest(
     if not lots:
         return [f"🌾 <b>Сельхозземля на тендерах</b>\nНичего не найдено ({scope})."]
 
-    hectares = sum(lot.area_sqm or 0 for lot in lots) / 10_000
+    area = sum(lot.area_sqm or 0 for lot in lots)
     priced = [lot for lot in lots if lot.price_usd]
     header = [
         "🌾 <b>Сельхозземля на тендерах</b>",
         f"Дата: {date.today().isoformat()} · {scope}",
-        f"Лотов: {len(lots)} · площадь: {hectares:,.1f} га".replace(",", " "),
+        f"Лотов: {len(lots)}" + (f" · площадь: {fmt_area(area)}" if area else ""),
     ]
     if priced:
         total = sum(lot.price_usd or 0 for lot in priced)

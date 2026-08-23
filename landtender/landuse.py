@@ -81,6 +81,19 @@ def classify(*texts: str | None) -> str | None:
     return None
 
 
+def classify_lot(*texts: str | None, renewal_kind: str | None = None) -> str | None:
+    """Назначение лота с поправкой на застройку.
+
+    Площадка под снос или расселение сельхозземлёй быть не может, чем бы ни
+    выглядел её текст. Реальный пример: комплекс פינוי בינוי на улице
+    «זאב חקלאי» в Иерусалиме — это имя улицы, а не хозяйство, и 235 квартир
+    под снос выдают его с головой.
+    """
+    if renewal_kind:
+        return None
+    return classify(*texts)
+
+
 def is_agricultural(*texts: str | None) -> bool:
     """Сельхозземля ли это."""
     return classify(*texts) == AGRICULTURE

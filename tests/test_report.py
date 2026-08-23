@@ -10,6 +10,7 @@ from landtender.report import (
     build_telegram_digest,
     export_csv,
     export_json,
+    fmt_area,
     fmt_usd,
     split_by_tier,
 )
@@ -285,3 +286,29 @@ class TestFarmlandDigest:
         lots = [self.farm(price_usd=2_000.0), self.farm(source_id="2", price_usd=7_000_000.0)]
         body = build_farmland_digest(lots)[1]
         assert body.index("$7.00 млн") < body.index("$2 000")
+
+
+class TestFmtArea:
+    """«0.0 га» ничего не сообщает — мелкие участки показываем в метрах."""
+
+    def test_fields_are_in_hectares(self):
+        assert fmt_area(145_000) == "14.5 га"
+
+    def test_large_numbers_are_spaced(self):
+        assert fmt_area(120_000_000) == "12 000.0 га"
+
+    def test_small_plots_stay_in_metres(self):
+        assert fmt_area(1) == "1 м²"
+        assert fmt_area(520) == "520 м²"
+
+    def test_digest_header_uses_it(self):
+        res = result(new_lots=[lot(land_use="agriculture", area_sqm=1.0)])
+        text = "\n".join(build_telegram_digest(res, 1_000_000, split_by_threshold=False))
+        assert "всего 1 м²" in text
+        assert "0.0 га" not in text
+
+    def test_farmland_header_omits_area_when_unknown(self):
+        farm = lot(land_use="agriculture", area_sqm=None)
+        header = build_farmland_digest([farm])[0]
+        assert "Лотов: 1" in header
+        assert "площадь" not in header

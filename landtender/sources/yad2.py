@@ -15,7 +15,7 @@ import logging
 from typing import Any, Iterable
 
 from ..extract import as_list, clean_text, to_float, to_iso_date, walk_dicts
-from ..landuse import classify as classify_landuse
+from ..landuse import classify_lot as classify_landuse
 from ..models import PRICE_KIND_ASKING, Lot
 from ..units import resolve_units
 from .base import Source

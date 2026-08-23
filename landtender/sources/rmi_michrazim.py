@@ -53,7 +53,7 @@ from ..places import code_for as code_for_place
 from ..places import matches as place_matches
 from ..places import resolve as resolve_places
 from ..money import choose_price
-from ..landuse import classify as classify_landuse
+from ..landuse import classify_lot as classify_landuse
 from ..renewal import classify as classify_renewal
 from ..units import resolve_units, units_from_record
 from .base import Source
@@ -279,7 +279,9 @@ def _tender_level_lot(meta: dict[str, Any], raw: dict[str, Any]) -> Lot:
         units_basis=basis,
         renewal_kind=renewal_kind,
         has_structure=has_structure,
-        land_use=classify_landuse(meta.get("purpose"), meta.get("tender_name")),
+        land_use=classify_landuse(
+            meta.get("purpose"), meta.get("tender_name"), renewal_kind=renewal_kind
+        ),
         published_date=meta["published_date"],
         closing_date=meta["closing_date"],
         committee_date=meta["committee_date"],
@@ -438,7 +440,9 @@ def _lots_from_details(
             built_area=built_area,
         )
         # Назначение участка первым: поле тендера бывает обобщённым.
-        land_use = classify_landuse(purpose, comments, meta.get("tender_name"))
+        land_use = classify_landuse(
+            purpose, comments, meta.get("tender_name"), renewal_kind=renewal_kind
+        )
 
         yield Lot(
             source=RmiMichrazimSource.name,

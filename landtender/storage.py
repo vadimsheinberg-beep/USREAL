@@ -230,7 +230,7 @@ class Storage:
     def iter_unclassified(self) -> list[sqlite3.Row]:
         """Лоты без разобранного назначения — их классифицируем задним числом."""
         return self.conn.execute(
-            "SELECT uid, purpose, tender_name FROM lots WHERE land_use IS NULL"
+            "SELECT uid, purpose, tender_name, renewal_kind FROM lots WHERE land_use IS NULL"
         ).fetchall()
 
     def set_land_use(self, uid: str, land_use: str) -> None:

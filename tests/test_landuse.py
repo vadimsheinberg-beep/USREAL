@@ -13,6 +13,7 @@ from landtender.landuse import (
     TOURISM,
     badge,
     classify,
+    classify_lot,
     is_agricultural,
 )
 
@@ -79,3 +80,18 @@ def test_badge_marks_only_farmland() -> None:
     assert badge(AGRICULTURE) == "🌾 сельхоз"
     assert badge(RESIDENTIAL) is None
     assert badge(None) is None
+
+
+class TestBuiltLandIsNotFarmland:
+    """Площадка под снос сельхозземлёй не бывает, что бы ни говорил текст."""
+
+    def test_renewal_project_named_after_a_street(self):
+        # «זאב חקלאי» — улица в Иерусалиме; комплекс на ней шёл как сельхоз
+        assert classify_lot("זאב חקלאי", renewal_kind="pinui_binui") is None
+
+    def test_without_renewal_the_text_still_decides(self):
+        assert classify_lot("קרקע חקלאית") == AGRICULTURE
+
+    def test_empty_renewal_kind_does_not_block(self):
+        assert classify_lot("קרקע חקלאית", renewal_kind=None) == AGRICULTURE
+        assert classify_lot("קרקע חקלאית", renewal_kind="") == AGRICULTURE

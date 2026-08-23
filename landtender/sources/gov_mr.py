@@ -17,7 +17,7 @@ from html.parser import HTMLParser
 from typing import Iterable
 
 from ..extract import clean_text, to_float, to_iso_date
-from ..landuse import classify as classify_landuse
+from ..landuse import classify_lot as classify_landuse
 from ..models import PRICE_KIND_MIN, Lot
 from ..units import resolve_units
 from .base import Source
