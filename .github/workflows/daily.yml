@@ -10,6 +10,10 @@ on:
         description: "Прогон без отправки в Telegram"
         type: boolean
         default: false
+      send_farmland:
+        description: "Прислать в канал срез по всей сельхозземле"
+        type: boolean
+        default: false
 
 concurrency:
   group: landtender-daily
@@ -35,9 +39,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: data
-          # v2 — база пересоздана: сменился формат ключа участка и включён
-          # отбор только действующих тендеров. Старый кеш подхватывать нельзя,
-          # иначе в сводку попадут записи со старыми идентификаторами.
+          # Ключ меняем только когда меняется смысл идентификаторов лотов:
+          # новые колонки база теперь дописывает сама (см. Storage._migrate),
+          # а сброс кеша стоил бы истории уведомлений — все лоты уехали бы в
+          # Telegram повторно.
           key: landtender-db-v4-${{ github.run_id }}
           restore-keys: landtender-db-v4-
 
@@ -69,6 +74,16 @@ jobs:
           flags=""
           [ "$DRY_RUN" = "true" ] && flags="--dry-run"
           landtender run $flags --export-csv "data/new-$(date +%F).csv"
+
+      - name: Сельхозземля — срез всей базы
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SEND_FARMLAND: ${{ github.event.inputs.send_farmland }}
+        run: |
+          flags=""
+          [ "$SEND_FARMLAND" = "true" ] && flags="--send"
+          landtender farmland $flags --out "data/farmland-$(date +%F).csv"
 
       - name: Сохранить выгрузку как артефакт
         if: always()
