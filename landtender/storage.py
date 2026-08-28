@@ -49,6 +49,16 @@ CREATE TABLE IF NOT EXISTS lots (
     estimate_n             INTEGER,
     estimate_r2            REAL,
     estimate_method        TEXT,
+    score_total            REAL,
+    score_price            REAL,
+    score_rezoning         REAL,
+    score_density          REAL,
+    score_market           REAL,
+    score_timing           REAL,
+    score_coverage         INTEGER,
+    max_bid_nis            REAL,
+    bid_headroom_pct       REAL,
+    roi_at_min             REAL,
     units                  INTEGER,
     units_basis            TEXT,
     price_nis              REAL,
@@ -102,6 +112,7 @@ CREATE INDEX IF NOT EXISTS idx_lots_source ON lots(source);
 CREATE INDEX IF NOT EXISTS idx_lots_renewal ON lots(renewal_kind);
 CREATE INDEX IF NOT EXISTS idx_lots_land_use ON lots(land_use);
 CREATE INDEX IF NOT EXISTS idx_lots_plan_signal ON lots(plan_signal);
+CREATE INDEX IF NOT EXISTS idx_lots_score ON lots(score_total);
 """
 
 #: Поля, изменение которых интересно показать в сводке отдельной строкой.
@@ -115,6 +126,9 @@ _LOT_COLUMNS = (
     "plan_signal", "plan_number", "plan_url", "zoning",
     "estimate_nis", "estimate_low_nis", "estimate_high_nis",
     "estimate_n", "estimate_r2", "estimate_method",
+    "score_total", "score_price", "score_rezoning", "score_density",
+    "score_market", "score_timing", "score_coverage",
+    "max_bid_nis", "bid_headroom_pct", "roi_at_min",
     "units", "units_basis",
     "price_nis", "price_kind", "development_costs_nis", "guarantee_nis", "price_usd",
     "fx_rate", "fx_date", "price_per_unit_usd", "price_per_sqm_usd", "tier",

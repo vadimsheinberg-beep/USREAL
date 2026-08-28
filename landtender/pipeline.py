@@ -126,6 +126,38 @@ def _apply_estimate(lot: Lot, comparables: Any) -> None:
     lot.estimate_method = value.method
 
 
+def _apply_scoring(lot: Lot, options: dict[str, Any]) -> None:
+    """Пять показателей и совет по ставке. Считается локально, без сети."""
+    from .bidding import (
+        DEFAULT_OVERHEAD,
+        DEFAULT_PURCHASE_TAX,
+        DEFAULT_TARGET_ROI,
+        advise,
+    )
+    from .scoring import score
+
+    card = score(lot)
+    lot.score_total = card.total
+    lot.score_price = card.price
+    lot.score_rezoning = card.rezoning
+    lot.score_density = card.density
+    lot.score_market = card.market
+    lot.score_timing = card.timing
+    lot.score_coverage = card.coverage or None
+
+    advice = advise(
+        lot,
+        target_roi=float(options.get("target_roi", DEFAULT_TARGET_ROI)),
+        purchase_tax=float(options.get("purchase_tax", DEFAULT_PURCHASE_TAX)),
+        overhead=float(options.get("overhead", DEFAULT_OVERHEAD)),
+    )
+    if advice is None:
+        return
+    lot.max_bid_nis = advice.max_bid_nis
+    lot.bid_headroom_pct = advice.headroom_pct
+    lot.roi_at_min = advice.roi_at_min
+
+
 def _apply_insight(lot: Lot, enricher: Any) -> None:
     """Кадастр и планы для одного лота. Отказ сервиса лот не роняет."""
     from .invest import SIGNAL_NONE, apply as apply_insight
@@ -182,6 +214,7 @@ def run_once(
 
     enricher = build_enricher(config, http)
     appraiser = build_appraiser(config, http, storage)
+    bidding_options = dict(config.section("bidding"))
 
     result = RunResult(
         started_at=started_at,
@@ -209,6 +242,7 @@ def run_once(
                 enrich_lot(lot, fx, threshold, include_dev)
                 if appraiser is not None:
                     _apply_estimate(lot, appraiser)
+                _apply_scoring(lot, bidding_options)
                 if lot.price_usd is None and not keep_priceless:
                     continue
                 report.lots += 1

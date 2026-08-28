@@ -149,6 +149,18 @@ def _demo_lots() -> list[Lot]:
             estimate_n=23,
             estimate_r2=0.58,
             estimate_method="regression",
+            # Пять показателей и запас прочности: до 3.4 млн ₪ ставка ещё
+            # даёт целевую доходность, минимум — 2.9 млн.
+            score_total=84.0,
+            score_price=95.0,
+            score_rezoning=70.0,
+            score_density=None,
+            score_market=77.0,
+            score_timing=100.0,
+            score_coverage=4,
+            max_bid_nis=3_390_000.0,
+            bid_headroom_pct=16.9,
+            roi_at_min=32.0 / 100,
         ),
         Lot(
             source="rmi_michrazim",

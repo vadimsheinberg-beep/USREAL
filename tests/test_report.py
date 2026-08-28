@@ -414,3 +414,63 @@ class TestEstimateLine:
     def test_estimate_is_exported(self, tmp_path):
         path = export_csv([self.valued()], tmp_path / "e.csv")
         assert "4100000" in path.read_text("utf-8").replace(".0", "")
+
+
+class TestScoreAndBid:
+    """Балл и запас прочности в строке лота."""
+
+    def scored(self, **kw):
+        data = dict(
+            score_total=84.0, score_price=95.0, score_rezoning=70.0,
+            score_market=77.0, score_timing=100.0, score_coverage=4,
+            max_bid_nis=3_390_000.0, bid_headroom_pct=16.9, roi_at_min=0.32,
+            price_nis=2_900_000.0, price_kind="min",
+        )
+        data.update(kw)
+        return lot(**data)
+
+    def text(self, lot_obj):
+        return "\n".join(build_telegram_digest(result(new_lots=[lot_obj]), 1_000_000))
+
+    def test_badge_shows_score_and_coverage(self):
+        """3 из 5 показателей — не то же самое, что 5 из 5."""
+        assert "[84/4п]" in self.text(self.scored())
+
+    def test_breakdown_lists_the_known_indicators(self):
+        text = self.text(self.scored())
+        assert "🧭 цена 95 · назначение 70 · рынок 77 · срок 100" in text
+        assert "плотность" not in text
+
+    def test_bid_line(self):
+        text = self.text(self.scored())
+        assert "🎯 предельная ставка 3 390 000 ₪ (+17% к минимуму)" in text
+        assert "💼 ROI при выигрыше по минимуму: 32%" in text
+
+    def test_unviable_lot_is_warned_about(self):
+        text = self.text(self.scored(max_bid_nis=1_000_000.0, bid_headroom_pct=-65.0))
+        assert "⚠️ минимальная цена уже выше предельной ставки" in text
+
+    def test_lot_without_score_has_no_badge(self):
+        assert "[" not in self.text(lot()).split("\n")[4]
+
+    def test_higher_score_comes_first(self):
+        res = result(new_lots=[
+            lot(source_id="low", score_total=20.0, price_usd=9_000_000.0),
+            lot(source_id="high", score_total=90.0, price_usd=100.0),
+        ])
+        text = "\n".join(build_telegram_digest(res, 1_000_000, split_by_threshold=False))
+        assert text.index("[90") < text.index("[20")
+
+    def test_unscored_lots_sink_below_scored_ones(self):
+        """Даже дешёвый лот с баллом важнее дорогого без него."""
+        res = result(new_lots=[
+            lot(source_id="none", price_usd=9_000_000.0),
+            lot(source_id="scored", score_total=10.0, price_usd=100.0),
+        ])
+        body = build_telegram_digest(res, 1_000_000, split_by_threshold=False)[1]
+        assert body.index("$100") < body.index("$9.00 млн")
+
+    def test_scores_are_exported(self, tmp_path):
+        path = export_csv([self.scored()], tmp_path / "s.csv")
+        text = path.read_text("utf-8")
+        assert "score_total" in text and "max_bid_nis" in text

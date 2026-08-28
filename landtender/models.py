@@ -77,6 +77,24 @@ class Lot:
     estimate_n: int | None = None
     estimate_r2: float | None = None
     estimate_method: str | None = None
+
+    # Пять показателей полезности и общий балл (см. scoring.py).
+    score_total: float | None = None
+    score_price: float | None = None
+    score_rezoning: float | None = None
+    score_density: float | None = None
+    score_market: float | None = None
+    score_timing: float | None = None
+    #: Сколько показателей из пяти удалось посчитать.
+    score_coverage: int | None = None
+
+    # Запас прочности ставки (см. bidding.py).
+    #: Предельная ставка, при которой доходность ещё равна целевой.
+    max_bid_nis: float | None = None
+    #: На сколько процентов она выше минимальной цены тендера.
+    bid_headroom_pct: float | None = None
+    #: Доходность при выигрыше по минимальной цене.
+    roi_at_min: float | None = None
     units: int | None = None
     units_basis: str | None = None
 

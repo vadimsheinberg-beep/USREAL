@@ -47,8 +47,20 @@ TIER_ICONS = {TIER_PREMIUM: "🔥", TIER_STANDARD: "▫️", TIER_UNKNOWN: "❔"
 
 
 def sort_by_price(lots: Sequence[Lot]) -> list[Lot]:
-    """Дорогие сверху, лоты без цены — в конце."""
-    return sorted(lots, key=lambda lot: (lot.price_usd is None, -(lot.price_usd or 0)))
+    """Сначала по баллу полезности, затем по цене.
+
+    Балл отвечает на вопрос «стоит ли этим заниматься», цена — только «сколько
+    это стоит». Пока балла нет (нет оценки), порядок прежний, по цене.
+    """
+    return sorted(
+        lots,
+        key=lambda lot: (
+            lot.score_total is None,
+            -(lot.score_total or 0),
+            lot.price_usd is None,
+            -(lot.price_usd or 0),
+        ),
+    )
 
 
 def split_by_tier(lots: Sequence[Lot]) -> dict[str, list[Lot]]:
@@ -62,10 +74,18 @@ def split_by_tier(lots: Sequence[Lot]) -> dict[str, list[Lot]]:
 # --------------------------------------------------------------- Telegram ---
 
 
+def _score_badge(lot: Lot) -> str:
+    """Общий балл со степенью полноты: 3/5 показателей — не то же, что 5/5."""
+    if lot.score_total is None:
+        return ""
+    coverage = f"/{lot.score_coverage}п" if lot.score_coverage else ""
+    return f" <b>[{lot.score_total:.0f}{coverage}]</b>"
+
+
 def _lot_line_html(lot: Lot) -> str:
     name = escape(lot.label)
     link = f'<a href="{escape(lot.url)}">{name}</a>' if lot.url else name
-    parts = [f"• {link}"]
+    parts = [f"• {link}{_score_badge(lot)}"]
 
     money = fmt_usd(lot.price_usd)
     if lot.price_nis:
@@ -116,6 +136,20 @@ def _lot_line_html(lot: Lot) -> str:
             elif ratio >= 1.25:
                 parts.append(f"  🔴 запрошено на {(ratio - 1) * 100:.0f}% выше оценки")
 
+    # Запас прочности: до какой суммы можно поднимать заявку и что будет,
+    # если выиграть по минимальной цене.
+    if lot.max_bid_nis:
+        bid = f"  🎯 предельная ставка {fmt_nis(lot.max_bid_nis)}"
+        if lot.bid_headroom_pct is not None:
+            sign = "+" if lot.bid_headroom_pct >= 0 else ""
+            bid += f" ({sign}{lot.bid_headroom_pct:.0f}% к минимуму)"
+        parts.append(bid)
+        if lot.roi_at_min is not None:
+            parts.append(f"  💼 ROI при выигрыше по минимуму: {lot.roi_at_min * 100:.0f}%")
+        # Предельная ставка ниже минимальной цены — участвовать незачем.
+        if lot.price_nis and lot.max_bid_nis < lot.price_nis:
+            parts.append("  ⚠️ минимальная цена уже выше предельной ставки")
+
     # Смена назначения — единственное, что делает дешёвую землю дорогой,
     # поэтому она идёт отдельной строкой, а не теряется в хвосте.
     signal = SIGNAL_BADGES.get(lot.plan_signal or "")
@@ -123,6 +157,21 @@ def _lot_line_html(lot: Lot) -> str:
         plan = escape(lot.plan_number) if lot.plan_number else ""
         link = f'<a href="{escape(lot.plan_url)}">{plan}</a>' if lot.plan_url and plan else plan
         parts.append(f"  {signal}" + (f" · {link}" if link else ""))
+
+    # Разбивка балла: общий балл без слагаемых нечем проверить.
+    breakdown = [
+        (title, value)
+        for title, value in (
+            ("цена", lot.score_price),
+            ("назначение", lot.score_rezoning),
+            ("плотность", lot.score_density),
+            ("рынок", lot.score_market),
+            ("срок", lot.score_timing),
+        )
+        if value is not None
+    ]
+    if breakdown:
+        parts.append("  🧭 " + " · ".join(f"{t} {v:.0f}" for t, v in breakdown))
 
     tail = []
     field = landuse_badge(lot.land_use)
@@ -381,6 +430,9 @@ EXPORT_FIELDS = (
     "plan_signal", "plan_number", "plan_url",
     "estimate_nis", "estimate_low_nis", "estimate_high_nis",
     "estimate_n", "estimate_r2", "estimate_method",
+    "score_total", "score_price", "score_rezoning", "score_density",
+    "score_market", "score_timing", "score_coverage",
+    "max_bid_nis", "bid_headroom_pct", "roi_at_min",
     "units", "units_basis",
     "price_nis", "price_kind", "development_costs_nis", "guarantee_nis", "price_usd", "price_per_unit_usd", "price_per_sqm_usd",
     "tier", "published_date", "opening_date", "closing_date", "url",
