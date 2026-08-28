@@ -107,6 +107,25 @@ NADLAN_HEADERS = {
     "Accept": "application/json, text/plain, */*",
 }
 
+# ------------------------------------------------- макропоказатели ----------
+
+#: Центральное статбюро (למ"ס). Публичный API по индексам и временным рядам.
+#: Требует заголовка User-Agent — без него отвечает отказом.
+CBS_INDEX_DATA = "https://api.cbs.gov.il/index/data/price"
+CBS_INDEX_CATALOG = "https://api.cbs.gov.il/index/catalog/catalog"
+
+#: Коды индексов, которые имеют отношение к земле. Проверяются разведкой:
+#: если код не тот, ответ будет пустым и это сразу видно.
+CBS_INDEX_CANDIDATES = {
+    "120010": 'מדד המחירים לצרכן — ИПЦ',
+    "200010": 'מדד מחירי הדירות — цены квартир',
+    "160010": 'מדד תשומות הבנייה — затраты на строительство',
+}
+
+#: Банк Израиля. Курс мы уже берём отсюда же, хост в CI доступен.
+BOI_SERIES = "https://edge.boi.gov.il/FusionEdgeServer/sdmx/v2/data/dataflow/BOI.STATISTICS/SERIES"
+BOI_PUBLIC_API = "https://www.boi.org.il/PublicApi"
+
 MAX_JSON_CHARS = 2500
 
 
@@ -325,4 +344,45 @@ def inspect_nadlan(http: HttpClient, settlement_code: str = "5000") -> int:
             print(f"  Записей: {len(data)}")
             if data:
                 print(_fmt(data[0], 1200))
+    return 0 if ok else 1
+
+
+# ========================================================== макро ===========
+
+
+def inspect_macro(http: HttpClient) -> int:
+    """Показатели, которые обновляются регулярно и влияют на цену земли.
+
+    Проверяем не наличие сайта, а то, что API реально отдаёт числа и в каком
+    виде: индекс строительных затрат, к которому привязаны платежи по
+    тендерам рм"и, полезен только если его можно прочитать программно.
+    """
+    _head("РАЗВЕДКА МАКРОПОКАЗАТЕЛЕЙ (למ\"ס, בנק ישראל)")
+
+    ok = 0
+    print("\nЦентральное статбюро — индексы:")
+    for code, title in CBS_INDEX_CANDIDATES.items():
+        print("\n" + "-" * 72)
+        print(f"{title}  (id={code})")
+        try:
+            data = http.get_json(
+                CBS_INDEX_DATA,
+                params={"id": code, "format": "json", "download": "false", "last": "3"},
+            )
+        except HttpError as exc:
+            print(f"  ✗ {exc}")
+            continue
+        ok += 1
+        print(f"  Ключи ответа: {sorted(data.keys()) if isinstance(data, dict) else type(data)}")
+        print(_fmt(data, 1500))
+
+    print("\n" + "-" * 72)
+    print(f"Каталог индексов: {CBS_INDEX_CATALOG}")
+    try:
+        catalog = http.get_json(CBS_INDEX_CATALOG, params={"format": "json", "download": "false"})
+        print(_fmt(catalog, 1200))
+        ok += 1
+    except HttpError as exc:
+        print(f"  ✗ {exc}")
+
     return 0 if ok else 1

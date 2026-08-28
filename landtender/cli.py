@@ -98,7 +98,7 @@ def build_parser() -> argparse.ArgumentParser:
     inspect_cmd.add_argument("--ckan", help="вместо портала рм\"י разведать наборы data.gov.il по запросу")
     inspect_cmd.add_argument(
         "--service",
-        choices=("iplan", "govmap", "nadlan"),
+        choices=("iplan", "govmap", "nadlan", "macro"),
         help="разведать карт-сервис: реестр планов, участки govmap или рынок nadlan",
     )
     inspect_cmd.add_argument("--gush", help="гуш для примера записи (iplan, govmap)")
@@ -206,12 +206,19 @@ def cmd_inspect(args: argparse.Namespace) -> int:
     http = build_http(config)
 
     if args.service:
-        from .mapping import inspect_govmap, inspect_iplan, inspect_nadlan
+        from .mapping import (
+            inspect_govmap,
+            inspect_iplan,
+            inspect_macro,
+            inspect_nadlan,
+        )
 
         if args.service == "iplan":
             return inspect_iplan(http, gush=args.gush)
         if args.service == "govmap":
             return inspect_govmap(http, gush=args.gush, helka=args.helka)
+        if args.service == "macro":
+            return inspect_macro(http)
         return inspect_nadlan(http, settlement_code=args.settlement_code)
 
     if args.ckan:

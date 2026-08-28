@@ -24,7 +24,7 @@ on:
       service:
         description: "Разведать карт-сервис вместо рм\"י"
         type: choice
-        options: ["", "iplan", "govmap", "nadlan"]
+        options: ["", "iplan", "govmap", "nadlan", "macro"]
         default: ""
       gush:
         description: "Гуш для примера (iplan, govmap)"
