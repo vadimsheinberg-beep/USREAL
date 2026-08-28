@@ -91,8 +91,9 @@ def build_parser() -> argparse.ArgumentParser:
         "harvest", help="собрать архив закрытых торгов — база сравнимых сделок"
     )
     harvest_cmd.add_argument(
-        "--budget", type=int, default=800,
-        help="сколько тендеров догрузить деталями за один заход",
+        "--budget", type=int, default=350,
+        help="сколько тендеров догрузить деталями за один заход "
+             "(сбор накопительный: следующий запуск добирает остальные)",
     )
 
     sub.add_parser("stats", help="показать состояние базы и последний запуск")

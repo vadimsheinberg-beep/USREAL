@@ -30,7 +30,7 @@ concurrency:
 jobs:
   collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4
@@ -86,8 +86,12 @@ jobs:
           landtender run $flags --export-csv "data/new-$(date +%F).csv"
 
       - name: Архив закрытых торгов — база сравнимых сделок
+        # Порция намеренно небольшая: портал отвечает по паре секунд на
+        # запрос, и 900 деталей не укладываются в лимит времени задачи.
+        # Сбор накопительный — кеш отпечатков не даёт забирать одно и то же,
+        # поэтому каждый следующий запуск добирает новые тендеры.
         if: ${{ github.event.inputs.harvest == 'true' }}
-        run: landtender harvest --budget 900
+        run: landtender harvest --budget 350
 
       - name: Сельхозземля — срез всей базы
         env:
