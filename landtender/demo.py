@@ -141,6 +141,14 @@ def _demo_lots() -> list[Lot]:
             plan_signal="likely",
             plan_number="353-0061416",
             plan_url="https://mavat.iplan.gov.il/SV4/1/3000220263/310",
+            # Оценка по сделкам с соседними участками: запрошено заметно
+            # ниже — именно такие лоты и надо замечать.
+            estimate_nis=4_100_000.0,
+            estimate_low_nis=3_400_000.0,
+            estimate_high_nis=4_900_000.0,
+            estimate_n=23,
+            estimate_r2=0.58,
+            estimate_method="regression",
         ),
         Lot(
             source="rmi_michrazim",

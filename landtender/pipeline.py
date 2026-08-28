@@ -78,6 +78,54 @@ def build_enricher(config: Config, http: HttpClient) -> Any:
     )
 
 
+def build_appraiser(config: Config, http: HttpClient, storage: Storage) -> Any:
+    """Оценка по сделкам с соседними участками, если включена в конфиге.
+
+    Сравнимые берутся из собственной базы: сделки там появляются после
+    ``landtender harvest``, который забирает архив закрытых торгов рм"и.
+    Без него оценивать не по чему, и это честнее сказать сразу.
+    """
+    section = config.section("valuation")
+    if not section.get("estimate", False):
+        return None
+
+    from .macro import HOUSING, CbsIndices
+    from .valuation import collect_comparables
+
+    housing = CbsIndices(http, cache_path=config.db_path.parent).series(HOUSING, last=180)
+    comparables = collect_comparables(stored_lots(storage), housing_index=housing)
+    if not comparables:
+        log.info("Оценка включена, но сделок в базе нет — запустите landtender harvest")
+        return None
+
+    log.info(
+        "Оценка: сравнимых сделок %d%s",
+        len(comparables),
+        "" if housing else " (без поправки на индекс — ряд недоступен)",
+    )
+    return comparables
+
+
+def _apply_estimate(lot: Lot, comparables: Any) -> None:
+    """Оценка одного лота. Мало данных — поля остаются пустыми."""
+    from .valuation import estimate
+
+    try:
+        value = estimate(lot, comparables)
+    except Exception as exc:  # noqa: BLE001 - сводка важнее одной оценки
+        log.warning("Оценка лота %s не удалась: %s", lot.uid, exc)
+        return
+    if value is None:
+        return
+
+    lot.estimate_nis = value.price_nis
+    lot.estimate_low_nis = value.low_nis
+    lot.estimate_high_nis = value.high_nis
+    lot.estimate_n = value.n
+    lot.estimate_r2 = value.r_squared
+    lot.estimate_method = value.method
+
+
 def _apply_insight(lot: Lot, enricher: Any) -> None:
     """Кадастр и планы для одного лота. Отказ сервиса лот не роняет."""
     from .invest import SIGNAL_NONE, apply as apply_insight
@@ -133,6 +181,7 @@ def run_once(
     today = date.today().isoformat()
 
     enricher = build_enricher(config, http)
+    appraiser = build_appraiser(config, http, storage)
 
     result = RunResult(
         started_at=started_at,
@@ -158,6 +207,8 @@ def run_once(
                 if enricher is not None:
                     _apply_insight(lot, enricher)
                 enrich_lot(lot, fx, threshold, include_dev)
+                if appraiser is not None:
+                    _apply_estimate(lot, appraiser)
                 if lot.price_usd is None and not keep_priceless:
                     continue
                 report.lots += 1

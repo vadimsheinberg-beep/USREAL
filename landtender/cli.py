@@ -87,6 +87,14 @@ def build_parser() -> argparse.ArgumentParser:
     farm_cmd.add_argument("--out", help="сохранить список в CSV")
     farm_cmd.add_argument("--limit", type=int, default=60, help="сколько лотов показать")
 
+    harvest_cmd = sub.add_parser(
+        "harvest", help="собрать архив закрытых торгов — база сравнимых сделок"
+    )
+    harvest_cmd.add_argument(
+        "--budget", type=int, default=800,
+        help="сколько тендеров догрузить деталями за один заход",
+    )
+
     sub.add_parser("stats", help="показать состояние базы и последний запуск")
 
     inspect_cmd = sub.add_parser(
@@ -341,6 +349,38 @@ def cmd_telegram_test(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_harvest(args: argparse.Namespace) -> int:
+    """Забирает архив закрытых торгов рм"и — цены состоявшихся сделок.
+
+    Отдельная команда, а не часть ежедневного запуска: архив большой, идёт
+    долго и нужен редко. Сводка при этом не рассылается — накопление базы не
+    повод писать в канал.
+    """
+    config = load_config(args.config)
+    # Архив: не только действующие тендеры, и сроки подачи давно прошли.
+    config.data.setdefault("sources", {}).setdefault("rmi_michrazim", {}).update(
+        {"active_only": False, "details_budget": args.budget}
+    )
+    config.data.setdefault("general", {})["hide_expired"] = False
+    config.data.setdefault("valuation", {})["estimate"] = False
+
+    with open_storage(config, args.db) as storage:
+        before = storage.count_lots()
+        result = run_once(config, storage, only_sources=["rmi_michrazim"])
+        after = storage.count_lots()
+
+        from .valuation import collect_comparables
+
+        deals = collect_comparables(stored_lots(storage))
+
+    print(f"Просмотрено записей: {result.total_seen}")
+    print(f"Лотов в базе: {before} → {after}")
+    print(f"Сделок с ценой, годных для сравнения: {len(deals)}")
+    if not deals:
+        print("Цен сделок пока нет — повторите команду, лимит деталей расходуется постепенно.")
+    return 0
+
+
 def cmd_farmland(args: argparse.Namespace) -> int:
     """Показывает всю сельхозземлю из базы, а не только новую за сегодня."""
     from .notify import TelegramError, TelegramNotifier
@@ -412,6 +452,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_check(args)
     if command == "farmland":
         return cmd_farmland(args)
+    if command == "harvest":
+        return cmd_harvest(args)
     if command == "export":
         return cmd_export(args)
     if command == "stats":

@@ -94,6 +94,28 @@ def _lot_line_html(lot: Lot) -> str:
     if extra:
         parts.append("  🏦 " + " · ".join(extra))
 
+    # Оценка по сделкам — всегда вместе с тем, на чём она построена.
+    # Число без выборки и R² выглядело бы точнее, чем оно есть.
+    if lot.estimate_nis:
+        estimate = f"  📊 оценка {fmt_nis(lot.estimate_nis)}"
+        if lot.estimate_low_nis and lot.estimate_high_nis:
+            estimate += f" ({fmt_nis(lot.estimate_low_nis)} — {fmt_nis(lot.estimate_high_nis)})"
+        basis = [f"по {lot.estimate_n} сделк(ам)"] if lot.estimate_n else []
+        if lot.estimate_r2 is not None:
+            basis.append(f"R²={lot.estimate_r2:.2f}")
+        elif lot.estimate_method == "median":
+            basis.append("медиана")
+        if basis:
+            estimate += " · " + ", ".join(basis)
+        parts.append(estimate)
+        # Сравнение с ценой тендера — то, ради чего оценка и нужна.
+        if lot.price_nis:
+            ratio = lot.price_nis / lot.estimate_nis
+            if ratio <= 0.8:
+                parts.append(f"  🟢 запрошено на {(1 - ratio) * 100:.0f}% ниже оценки")
+            elif ratio >= 1.25:
+                parts.append(f"  🔴 запрошено на {(ratio - 1) * 100:.0f}% выше оценки")
+
     # Смена назначения — единственное, что делает дешёвую землю дорогой,
     # поэтому она идёт отдельной строкой, а не теряется в хвосте.
     signal = SIGNAL_BADGES.get(lot.plan_signal or "")
@@ -357,6 +379,8 @@ EXPORT_FIELDS = (
     "gush", "chelka", "purpose", "status", "area_sqm", "built_area_sqm", "renewal_kind",
     "has_structure", "land_use", "zoning",
     "plan_signal", "plan_number", "plan_url",
+    "estimate_nis", "estimate_low_nis", "estimate_high_nis",
+    "estimate_n", "estimate_r2", "estimate_method",
     "units", "units_basis",
     "price_nis", "price_kind", "development_costs_nis", "guarantee_nis", "price_usd", "price_per_unit_usd", "price_per_sqm_usd",
     "tier", "published_date", "opening_date", "closing_date", "url",

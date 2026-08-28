@@ -365,3 +365,52 @@ class TestOpeningDate:
     def test_opening_date_is_exported(self, tmp_path):
         path = export_csv([self.unopened()], tmp_path / "out.csv")
         assert "2026-10-26" in path.read_text("utf-8")
+
+
+class TestEstimateLine:
+    """Оценка показывается только вместе с тем, на чём построена."""
+
+    def valued(self, **kw):
+        data = dict(
+            estimate_nis=4_100_000.0,
+            estimate_low_nis=3_400_000.0,
+            estimate_high_nis=4_900_000.0,
+            estimate_n=23,
+            estimate_r2=0.58,
+            estimate_method="regression",
+        )
+        data.update(kw)
+        return lot(**data)
+
+    def text(self, lot_obj):
+        return "\n".join(build_telegram_digest(result(new_lots=[lot_obj]), 1_000_000))
+
+    def test_shows_value_interval_sample_and_r2(self):
+        text = self.text(self.valued(price_nis=None, price_usd=None))
+        assert "📊 оценка 4 100 000 ₪ (3 400 000 ₪ — 4 900 000 ₪)" in text
+        assert "по 23 сделк(ам), R²=0.58" in text
+
+    def test_median_says_so_instead_of_faking_r2(self):
+        text = self.text(self.valued(estimate_r2=None, estimate_method="median",
+                                     estimate_low_nis=None, estimate_high_nis=None))
+        assert "медиана" in text
+        assert "R²" not in text
+
+    def test_bargain_is_flagged(self):
+        text = self.text(self.valued(price_nis=2_000_000.0))
+        assert "🟢 запрошено на 51% ниже оценки" in text
+
+    def test_overpriced_is_flagged(self):
+        text = self.text(self.valued(price_nis=9_000_000.0))
+        assert "🔴 запрошено на 120% выше оценки" in text
+
+    def test_price_near_the_estimate_is_not_flagged(self):
+        text = self.text(self.valued(price_nis=4_000_000.0))
+        assert "🟢" not in text and "🔴" not in text
+
+    def test_no_estimate_no_line(self):
+        assert "оценка" not in self.text(lot())
+
+    def test_estimate_is_exported(self, tmp_path):
+        path = export_csv([self.valued()], tmp_path / "e.csv")
+        assert "4100000" in path.read_text("utf-8").replace(".0", "")

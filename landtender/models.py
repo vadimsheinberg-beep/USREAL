@@ -68,6 +68,15 @@ class Lot:
     plan_url: str | None = None
     #: Назначение по действующему плану («קרקע חקלאית», «מגורים א'»).
     zoning: str | None = None
+    #: Оценка по сделкам с соседними участками (см. valuation.py).
+    estimate_nis: float | None = None
+    estimate_low_nis: float | None = None
+    estimate_high_nis: float | None = None
+    #: На скольких сделках построена оценка и насколько модель объясняет
+    #: разброс. Без этих двух чисел саму оценку показывать нельзя.
+    estimate_n: int | None = None
+    estimate_r2: float | None = None
+    estimate_method: str | None = None
     units: int | None = None
     units_basis: str | None = None
 
