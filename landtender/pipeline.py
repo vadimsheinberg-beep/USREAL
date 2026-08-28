@@ -90,17 +90,25 @@ def build_appraiser(config: Config, http: HttpClient, storage: Storage) -> Any:
         return None
 
     from .macro import HOUSING, CbsIndices
-    from .valuation import collect_comparables
+    from .valuation import MAX_AGE_YEARS, collect_comparables
 
-    housing = CbsIndices(http, cache_path=config.db_path.parent).series(HOUSING, last=180)
-    comparables = collect_comparables(stored_lots(storage), housing_index=housing)
+    # Ряд запрашивается длиннее окна сравнения: сделка, для которой индекса
+    # нет, из выборки выбрасывается, и короткий ряд молча резал бы базу.
+    max_age = int(section.get("max_age_years", MAX_AGE_YEARS))
+    housing = CbsIndices(http, cache_path=config.db_path.parent).series(
+        HOUSING, last=(max_age + 2) * 12
+    )
+    comparables = collect_comparables(
+        stored_lots(storage), housing_index=housing, max_age_years=max_age
+    )
     if not comparables:
         log.info("Оценка включена, но сделок в базе нет — запустите landtender harvest")
         return None
 
     log.info(
-        "Оценка: сравнимых сделок %d%s",
+        "Оценка: сравнимых сделок %d за %d лет%s",
         len(comparables),
+        max_age,
         "" if housing else " (без поправки на индекс — ряд недоступен)",
     )
     return comparables

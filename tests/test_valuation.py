@@ -1,6 +1,7 @@
 """Оценка лота по сделкам с соседними участками."""
 
 import math
+from datetime import date
 
 import pytest
 
@@ -9,8 +10,10 @@ from landtender.macro import IndexPoint
 from landtender.models import Lot
 from landtender.regression import fit, median
 from landtender.valuation import (
+    MAX_AGE_YEARS,
     MIN_COMPARABLES,
     Comparable,
+    age_histogram,
     collect_comparables,
     estimate,
     explain_rejections,
@@ -93,9 +96,31 @@ class TestCollectComparables:
         assert comp.index_factor == pytest.approx(1.2)
 
     def test_without_index_the_price_is_left_alone(self):
+        """Без ряда индекса цена номинальная, и множитель пуст, а не равен единице."""
         comp = collect_comparables([deal(price=1_000_000.0)])[0]
         assert comp.price_nis == 1_000_000.0
-        assert comp.index_factor == 1.0
+        assert comp.index_factor is None
+
+    def test_deal_outside_the_index_is_dropped(self):
+        """Ряд подключён, но месяца в нём нет — сделка уходит, а не идёт по номиналу.
+
+        Множитель 1.0 здесь означал бы «цены с 2011 года не менялись»: на
+        двадцатилетнем окне такая сделка занижала бы оценку вдвое.
+        """
+        points = [
+            IndexPoint(code="40010", name=None, year=2026, month=1, value=120.0),
+            IndexPoint(code="40010", name=None, year=2022, month=1, value=100.0),
+        ]
+        assert collect_comparables([deal(when="2011-05-01")], points) == []
+
+    def test_age_is_recorded(self):
+        comp = collect_comparables([deal(when="2019-06-01")], today=date(2026, 8, 28))[0]
+        assert comp.years_ago == 7.0
+
+    def test_window_is_configurable(self):
+        rows = [deal(when="2012-01-01")]
+        assert collect_comparables(rows, today=date(2026, 8, 28)) != []
+        assert collect_comparables(rows, today=date(2026, 8, 28), max_age_years=10) == []
 
 
 def pool(n=20, city="חיפה", **kw):
@@ -201,7 +226,7 @@ class TestExplainRejections:
         assert counts["годных"] == 1
         assert counts["нет цены сделки"] == 1
         assert counts["нет площади"] == 1
-        assert counts["старше десяти лет"] == 1
+        assert counts[f"старше {MAX_AGE_YEARS} лет"] == 1
 
     def test_each_row_is_counted_once(self):
         rows = [deal(str(i)) for i in range(5)]
@@ -212,3 +237,23 @@ class TestExplainRejections:
     def test_agrees_with_collect(self):
         rows = [deal("1"), deal("2", price_kind="min"), deal("3", area=None)]
         assert explain_rejections(rows)["годных"] == len(collect_comparables(rows))
+
+
+class TestAgeHistogram:
+    """Гистограмма по годам: за какие годы архив вообще есть.
+
+    Разбор причин отвечает, сколько сделок потеряно по возрасту; гистограмма
+    показывает, куда двигать окно, чтобы их вернуть.
+    """
+
+    def test_counts_by_year_newest_first(self):
+        rows = [
+            deal("1", when="2025-06-01"),
+            deal("2", when="2025-11-01"),
+            deal("3", when="2008-01-01"),
+        ]
+        assert age_histogram(rows) == {2025: 2, 2008: 1}
+
+    def test_ignores_rows_without_a_deal_price(self):
+        rows = [deal("1", price_kind="min"), deal("2", area=None), deal("3")]
+        assert age_histogram(rows) == {2025: 1}

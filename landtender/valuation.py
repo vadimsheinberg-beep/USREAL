@@ -9,13 +9,16 @@
 Как считается. Регрессия по логарифму цены за квадратный метр:
 
     log(цена/м²) = b0 + b1·log(площадь) + b2·плотность + b3·сельхоз
+                 + b4·возраст сделки
 
 Логарифм цены — потому что цена за метр падает с ростом участка не линейно, а
 примерно степенно: гектар поля стоит за метр много меньше, чем сотка под дом.
 
 Цены старых сделок приводятся к сегодняшним деньгам индексом рынка жилья
 (``macro.py``). Без этого сделка 2019 года тянула бы оценку вниз просто
-потому, что она старая.
+потому, что она старая. Индекс отвечает за квартиры, а не за землю, поэтому
+возраст сделки входит в регрессию отдельным признаком: чего индекс не
+объяснил, объяснит коэффициент при нём.
 
 Чего эта оценка не делает. Она не заменяет шамая. Выборка мала, признаков
 мало, разброс цен на землю огромен. Поэтому вместе с числом всегда
@@ -40,9 +43,15 @@ log = logging.getLogger(__name__)
 #: Меньше этого числа сделок регрессию строить не на чем.
 MIN_COMPARABLES = 8
 
-#: Сделки старше этого срока в расчёт не идут даже с поправкой на индекс:
-#: за десять лет меняется не только цена, но и сам рынок.
-MAX_AGE_YEARS = 10
+#: Сделки старше этого срока в расчёт не идут. Порог был десять лет, и на
+#: реальном архиве рм"и это оказалось почти запретом: из 2383 состоявшихся
+#: сделок с ценой и площадью в окно попали десять, остальные 2373 отсеялись
+#: по возрасту. Архив закрытых торгов по природе своей старый, и выбрасывать
+#: его — значит остаться без базы сравнения вовсе. Двадцать лет держатся на
+#: двух подпорках: цена приводится к сегодняшним деньгам индексом рынка жилья,
+#: а возраст сделки входит в регрессию отдельным признаком, так что остаток
+#: временного сноса модель забирает себе, а не выдаёт за свойство участка.
+MAX_AGE_YEARS = 20
 
 #: Насколько модель должна объяснять разброс, чтобы её показывать.
 MIN_R_SQUARED = 0.2
@@ -61,8 +70,11 @@ class Comparable:
     units: int | None
     land_use: str | None
     when: str | None
-    #: Множитель индексации; 1.0 означает «поправку применить не удалось».
-    index_factor: float = 1.0
+    #: Множитель индексации; ``None`` — ряд индекса не подключён и цена
+    #: осталась номинальной. Единица здесь означала бы «инфляции не было».
+    index_factor: float | None = None
+    #: Сколько лет назад состоялась сделка. Признак регрессии, а не справка.
+    years_ago: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -93,15 +105,23 @@ def collect_comparables(
     rows: list[Lot],
     housing_index: list[IndexPoint] | None = None,
     today: date | None = None,
+    max_age_years: int = MAX_AGE_YEARS,
 ) -> list[Comparable]:
     """Отбирает состоявшиеся сделки, годные для сравнения.
 
     Годной считается запись с ценой сделки (не минимальной ценой — это
     разные вещи), площадью и датой. Минимальная цена показывает, чего хотело
     ведомство, а не сколько рынок заплатил.
+
+    Если ряд индекса подключён, но нужного месяца в нём нет, сделка
+    отбрасывается. Раньше в этом случае подставлялся множитель 1.0, и сделка
+    2007 года входила в выборку по номиналу — то есть заведомо заниженной.
+    Пока окно было десятилетним, ошибка стоила процентов; на двадцати годах
+    она удваивала бы цену.
     """
     today = today or date.today()
     out: list[Comparable] = []
+    indexed = bool(housing_index)
 
     for lot in rows:
         if lot.price_kind != "final" or not lot.price_nis or not lot.area_sqm:
@@ -109,11 +129,15 @@ def collect_comparables(
         if lot.area_sqm <= 0 or lot.price_nis <= 0:
             continue
         when = lot.closing_date or lot.published_date
-        if not _within_age(when, today):
+        age = _age_years(when, today)
+        if age is None or not 0 <= age <= max_age_years:
             continue
 
-        factor = index_factor(housing_index or [], when) or 1.0
-        adjusted = lot.price_nis * factor
+        factor = index_factor(housing_index or [], when) if indexed else None
+        if indexed and factor is None:
+            continue
+
+        adjusted = lot.price_nis * (factor or 1.0)
         out.append(
             Comparable(
                 source_id=lot.source_id,
@@ -125,18 +149,25 @@ def collect_comparables(
                 land_use=lot.land_use,
                 when=when,
                 index_factor=factor,
+                years_ago=float(age),
             )
         )
     return out
 
 
-def explain_rejections(rows: list[Lot], today: date | None = None) -> dict[str, int]:
+def explain_rejections(
+    rows: list[Lot],
+    today: date | None = None,
+    max_age_years: int = MAX_AGE_YEARS,
+) -> dict[str, int]:
     """Куда девались сделки: по одной причине отсева на запись.
 
-    Из сотен закрытых тендеров годными оказываются единицы, и важно знать
+    Из тысяч закрытых тендеров годными оказываются немногие, и важно знать
     почему: нет цены сделки, нет площади или запись слишком старая. Гадать
     об этом бессмысленно — счётчики отвечают точно, и по ним видно, что
-    чинить: догружать детали, добирать площадь из кадастра или ничего.
+    чинить: догружать детали, добирать площадь из кадастра или расширять окно.
+    Именно этот разбор и показал, что окно в десять лет отсекало 2373 сделки
+    из 2383.
     """
     today = today or date.today()
     counts = {
@@ -144,7 +175,8 @@ def explain_rejections(rows: list[Lot], today: date | None = None) -> dict[str, 
         "нет цены сделки": 0,
         "нет площади": 0,
         "цена или площадь нулевые": 0,
-        "старше десяти лет": 0,
+        "нет даты": 0,
+        f"старше {max_age_years} лет": 0,
         "годных": 0,
     }
 
@@ -159,12 +191,36 @@ def explain_rejections(rows: list[Lot], today: date | None = None) -> dict[str, 
         if lot.area_sqm <= 0 or lot.price_nis <= 0:
             counts["цена или площадь нулевые"] += 1
             continue
-        if not _within_age(lot.closing_date or lot.published_date, today):
-            counts["старше десяти лет"] += 1
+        age = _age_years(lot.closing_date or lot.published_date, today)
+        if age is None:
+            counts["нет даты"] += 1
+            continue
+        if not 0 <= age <= max_age_years:
+            counts[f"старше {max_age_years} лет"] += 1
             continue
         counts["годных"] += 1
 
     return counts
+
+
+def age_histogram(rows: list[Lot], today: date | None = None) -> dict[int, int]:
+    """Сколько состоявшихся сделок какого года — по годам, свежие первыми.
+
+    Разбор причин отвечает «сколько потеряно по возрасту», гистограмма — «за
+    какие годы вообще есть архив». Без неё выбор окна остаётся гаданием.
+    """
+    today = today or date.today()
+    counts: dict[int, int] = {}
+    for lot in rows:
+        if lot.price_kind != "final" or not lot.price_nis or not lot.area_sqm:
+            continue
+        if lot.area_sqm <= 0 or lot.price_nis <= 0:
+            continue
+        year = _year_of(lot.closing_date or lot.published_date)
+        if year is None:
+            continue
+        counts[year] = counts.get(year, 0) + 1
+    return dict(sorted(counts.items(), reverse=True))
 
 
 def nearby(comparables: list[Comparable], lot: Lot) -> list[Comparable]:
@@ -202,7 +258,7 @@ def estimate(lot: Lot, comparables: list[Comparable]) -> Valuation | None:
     if len(pool) < MIN_COMPARABLES:
         return None
 
-    rows = [_features(c.area_sqm, c.units, c.land_use) for c in pool]
+    rows = [_features(c.area_sqm, c.units, c.land_use, c.years_ago) for c in pool]
     # Признак, одинаковый у всех сделок, ничего не объясняет и делает систему
     # вырожденной: если сельхоза в выборке нет вовсе, столбец из одних нулей
     # уронил бы регрессию целиком, а не просто оказался бесполезным.
@@ -248,7 +304,10 @@ def _informative(rows: list[list[float]]) -> list[int]:
 
 
 def _from_regression(lot: Lot, model: Fit, n: int, keep: list[int]) -> Valuation | None:
-    full = _features(lot.area_sqm, lot.units, lot.land_use)
+    # Оценка делается на сегодня, поэтому возраст сделки для прогноза — ноль:
+    # цены сравнимых уже приведены к сегодняшним деньгам, а остаток временного
+    # сноса сидит в коэффициенте при этом признаке.
+    full = _features(lot.area_sqm, lot.units, lot.land_use, 0.0)
     predicted = model.predict([full[j] for j in keep])
     if predicted is None:
         return None
@@ -270,20 +329,38 @@ def _from_regression(lot: Lot, model: Fit, n: int, keep: list[int]) -> Valuation
     )
 
 
-def _features(area_sqm: float | None, units: int | None, land_use: str | None) -> list[float]:
+def _features(
+    area_sqm: float | None,
+    units: int | None,
+    land_use: str | None,
+    years_ago: float = 0.0,
+) -> list[float]:
     """Признаки одной строки. Порядок обязан совпадать между обучением и прогнозом."""
     area = max(float(area_sqm or 1.0), 1.0)
     # Плотность на дунам, а не абсолютное число единиц: участок вдвое больше
     # с вдвое большим числом квартир — это тот же продукт, а не другой.
     density = (units or 0) / (area / 1000)
-    return [math.log(area), density, 1.0 if land_use == AGRICULTURE else 0.0]
+    return [
+        math.log(area),
+        density,
+        1.0 if land_use == AGRICULTURE else 0.0,
+        # Возраст сделки. Индекс рынка жилья приводит цену к сегодняшним
+        # деньгам, но земля дорожала не так же, как квартиры; этот признак
+        # забирает разницу себе, вместо того чтобы приписать её участку.
+        float(years_ago),
+    ]
 
 
-def _within_age(when: str | None, today: date) -> bool:
+def _year_of(when: str | None) -> int | None:
     if not when:
-        return False
+        return None
     try:
-        year = int(when[:4])
+        return int(str(when)[:4])
     except (ValueError, TypeError):
-        return False
-    return 0 <= today.year - year <= MAX_AGE_YEARS
+        return None
+
+
+def _age_years(when: str | None, today: date) -> int | None:
+    """Возраст сделки в годах; ``None`` — даты нет или она не читается."""
+    year = _year_of(when)
+    return None if year is None else today.year - year

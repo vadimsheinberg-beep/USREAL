@@ -370,11 +370,12 @@ def cmd_harvest(args: argparse.Namespace) -> int:
         result = run_once(config, storage, only_sources=["rmi_michrazim"])
         after = storage.count_lots()
 
-        from .valuation import collect_comparables, explain_rejections
+        from .valuation import age_histogram, collect_comparables, explain_rejections
 
         rows = stored_lots(storage)
         deals = collect_comparables(rows)
         breakdown = explain_rejections(rows)
+        years = age_histogram(rows)
 
     print(f"Просмотрено записей: {result.total_seen}")
     print(f"Лотов в базе: {before} → {after}")
@@ -382,6 +383,10 @@ def cmd_harvest(args: argparse.Namespace) -> int:
     print("\nПочему остальные не годятся:")
     for reason, count in breakdown.items():
         print(f"  {reason:<28} {count}")
+    if years:
+        print("\nСостоявшиеся сделки по годам:")
+        for year, count in list(years.items())[:25]:
+            print(f"  {year}  {'#' * min(count // 10 + 1, 40)} {count}")
     if not deals:
         print("\nЦен сделок пока нет — повторите команду, лимит деталей расходуется постепенно.")
     return 0
