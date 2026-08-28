@@ -21,6 +21,19 @@ on:
         description: "Разведать наборы data.gov.il по этому запросу (вместо рм\"י)"
         type: string
         default: ""
+      service:
+        description: "Разведать карт-сервис вместо рм\"י"
+        type: choice
+        options: ["", "iplan", "govmap", "nadlan"]
+        default: ""
+      gush:
+        description: "Гуш для примера (iplan, govmap)"
+        type: string
+        default: ""
+      helka:
+        description: "Хелка для примера участка (govmap)"
+        type: string
+        default: ""
 
 jobs:
   inspect:
@@ -50,7 +63,17 @@ jobs:
           LIMIT: ${{ github.event.inputs.limit }}
           ALL_TENDERS: ${{ github.event.inputs.all_tenders }}
           CKAN_QUERY: ${{ github.event.inputs.ckan_query }}
+          SERVICE: ${{ github.event.inputs.service }}
+          GUSH: ${{ github.event.inputs.gush }}
+          HELKA: ${{ github.event.inputs.helka }}
         run: |
+          if [ -n "$SERVICE" ]; then
+            args=""
+            [ -n "$GUSH" ] && args="$args --gush $GUSH"
+            [ -n "$HELKA" ] && args="$args --helka $HELKA"
+            landtender inspect --service "$SERVICE" $args
+            exit $?
+          fi
           if [ -n "$CKAN_QUERY" ]; then
             landtender inspect --ckan "$CKAN_QUERY" --limit "${LIMIT:-3}"
             exit $?

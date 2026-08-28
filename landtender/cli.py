@@ -96,6 +96,14 @@ def build_parser() -> argparse.ArgumentParser:
     inspect_cmd.add_argument("--limit", type=int, default=3, help="сколько тендеров смотреть")
     inspect_cmd.add_argument("--all", action="store_true", help="искать среди всех, а не только активных")
     inspect_cmd.add_argument("--ckan", help="вместо портала рм\"י разведать наборы data.gov.il по запросу")
+    inspect_cmd.add_argument(
+        "--service",
+        choices=("iplan", "govmap", "nadlan"),
+        help="разведать карт-сервис: реестр планов, участки govmap или рынок nadlan",
+    )
+    inspect_cmd.add_argument("--gush", help="гуш для примера записи (iplan, govmap)")
+    inspect_cmd.add_argument("--helka", help="хелка для примера участка (govmap)")
+    inspect_cmd.add_argument("--settlement-code", default="5000", help="код НП для nadlan")
 
     setup_cmd = sub.add_parser(
         "setup", help="мастер настройки Telegram: токен, канал, .env и пробная сводка"
@@ -196,6 +204,15 @@ def cmd_inspect(args: argparse.Namespace) -> int:
 
     config = load_config(args.config)
     http = build_http(config)
+
+    if args.service:
+        from .mapping import inspect_govmap, inspect_iplan, inspect_nadlan
+
+        if args.service == "iplan":
+            return inspect_iplan(http, gush=args.gush)
+        if args.service == "govmap":
+            return inspect_govmap(http, gush=args.gush, helka=args.helka)
+        return inspect_nadlan(http, settlement_code=args.settlement_code)
 
     if args.ckan:
         from .inspect import inspect_ckan

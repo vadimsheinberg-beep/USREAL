@@ -76,6 +76,10 @@ class HttpClient:
     def post(self, url: str, **kwargs: Any) -> requests.Response:
         return self.request("POST", url, **kwargs)
 
+    def get_text(self, url: str, **kwargs: Any) -> str:
+        """Ответ как текст — для XML вроде WFS GetCapabilities."""
+        return self.get(url, **kwargs).text
+
     def get_json(self, url: str, **kwargs: Any) -> Any:
         response = self.get(url, **kwargs)
         return _decode_json(response, url)
