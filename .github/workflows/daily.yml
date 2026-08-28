@@ -18,6 +18,10 @@ on:
         description: "Перезабрать детали всех тендеров (цены и площади)"
         type: boolean
         default: false
+      harvest:
+        description: "Собрать архив закрытых торгов — база сравнимых сделок"
+        type: boolean
+        default: false
 
 concurrency:
   group: landtender-daily
@@ -80,6 +84,10 @@ jobs:
           [ "$DRY_RUN" = "true" ] && flags="$flags --dry-run"
           [ "$FULL_REFRESH" = "true" ] && flags="$flags --full-refresh"
           landtender run $flags --export-csv "data/new-$(date +%F).csv"
+
+      - name: Архив закрытых торгов — база сравнимых сделок
+        if: ${{ github.event.inputs.harvest == 'true' }}
+        run: landtender harvest --budget 900
 
       - name: Сельхозземля — срез всей базы
         env:
