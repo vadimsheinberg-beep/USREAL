@@ -130,6 +130,43 @@ def collect_comparables(
     return out
 
 
+def explain_rejections(rows: list[Lot], today: date | None = None) -> dict[str, int]:
+    """Куда девались сделки: по одной причине отсева на запись.
+
+    Из сотен закрытых тендеров годными оказываются единицы, и важно знать
+    почему: нет цены сделки, нет площади или запись слишком старая. Гадать
+    об этом бессмысленно — счётчики отвечают точно, и по ним видно, что
+    чинить: догружать детали, добирать площадь из кадастра или ничего.
+    """
+    today = today or date.today()
+    counts = {
+        "всего": 0,
+        "нет цены сделки": 0,
+        "нет площади": 0,
+        "цена или площадь нулевые": 0,
+        "старше десяти лет": 0,
+        "годных": 0,
+    }
+
+    for lot in rows:
+        counts["всего"] += 1
+        if lot.price_kind != "final" or not lot.price_nis:
+            counts["нет цены сделки"] += 1
+            continue
+        if not lot.area_sqm:
+            counts["нет площади"] += 1
+            continue
+        if lot.area_sqm <= 0 or lot.price_nis <= 0:
+            counts["цена или площадь нулевые"] += 1
+            continue
+        if not _within_age(lot.closing_date or lot.published_date, today):
+            counts["старше десяти лет"] += 1
+            continue
+        counts["годных"] += 1
+
+    return counts
+
+
 def nearby(comparables: list[Comparable], lot: Lot) -> list[Comparable]:
     """Сделки, сравнимые с этим лотом.
 

@@ -370,15 +370,20 @@ def cmd_harvest(args: argparse.Namespace) -> int:
         result = run_once(config, storage, only_sources=["rmi_michrazim"])
         after = storage.count_lots()
 
-        from .valuation import collect_comparables
+        from .valuation import collect_comparables, explain_rejections
 
-        deals = collect_comparables(stored_lots(storage))
+        rows = stored_lots(storage)
+        deals = collect_comparables(rows)
+        breakdown = explain_rejections(rows)
 
     print(f"Просмотрено записей: {result.total_seen}")
     print(f"Лотов в базе: {before} → {after}")
     print(f"Сделок с ценой, годных для сравнения: {len(deals)}")
+    print("\nПочему остальные не годятся:")
+    for reason, count in breakdown.items():
+        print(f"  {reason:<28} {count}")
     if not deals:
-        print("Цен сделок пока нет — повторите команду, лимит деталей расходуется постепенно.")
+        print("\nЦен сделок пока нет — повторите команду, лимит деталей расходуется постепенно.")
     return 0
 
 

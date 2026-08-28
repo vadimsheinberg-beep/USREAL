@@ -13,6 +13,7 @@ from landtender.valuation import (
     Comparable,
     collect_comparables,
     estimate,
+    explain_rejections,
     nearby,
 )
 
@@ -183,3 +184,31 @@ class TestSelfExclusion:
     def test_other_lots_are_untouched(self):
         comps = pool(20)
         assert len(nearby(comps, deal("не из выборки"))) == len(comps)
+
+
+class TestExplainRejections:
+    """Счётчики отсева: почему из сотен сделок годными оказываются единицы."""
+
+    def test_counts_add_up(self):
+        rows = [
+            deal("годная"),
+            deal("минимум", price_kind="min"),
+            deal("без площади", area=None),
+            deal("старая", when="2005-01-01"),
+        ]
+        counts = explain_rejections(rows)
+        assert counts["всего"] == 4
+        assert counts["годных"] == 1
+        assert counts["нет цены сделки"] == 1
+        assert counts["нет площади"] == 1
+        assert counts["старше десяти лет"] == 1
+
+    def test_each_row_is_counted_once(self):
+        rows = [deal(str(i)) for i in range(5)]
+        counts = explain_rejections(rows)
+        reasons = sum(v for k, v in counts.items() if k != "всего")
+        assert reasons == counts["всего"]
+
+    def test_agrees_with_collect(self):
+        rows = [deal("1"), deal("2", price_kind="min"), deal("3", area=None)]
+        assert explain_rejections(rows)["годных"] == len(collect_comparables(rows))
