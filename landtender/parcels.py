@@ -46,6 +46,8 @@ class Parcel:
     county: str | None = None
     region: str | None = None
     status: str | None = None
+    #: Центр участка в EPSG:3857 — этой точкой спрашиваем реестр планов.
+    center: tuple[float, float] | None = None
 
     @property
     def area_sqm(self) -> float | None:
@@ -84,6 +86,8 @@ class GovmapParcels:
             "count": "1",
             "cql_filter": f"GUSH_NUM={gush_num} AND PARCEL={chelka_num}",
         }
+        # Геометрия нужна ровно за одним: получить точку внутри участка,
+        # чтобы спросить у реестра планов, что на ней разрешено.
         try:
             data = self.http.get_json(WFS_URL, params=params)
         except HttpError as exc:
@@ -93,10 +97,49 @@ class GovmapParcels:
         features = (data or {}).get("features") or []
         if not features:
             return None
-        return _to_parcel(features[0].get("properties") or {}, gush_num, chelka_num)
+        feature = features[0]
+        return _to_parcel(
+            feature.get("properties") or {},
+            gush_num,
+            chelka_num,
+            center=_centroid(feature.get("geometry")),
+        )
 
 
-def _to_parcel(props: dict[str, Any], gush: int, chelka: int) -> Parcel:
+def _centroid(geometry: Any) -> tuple[float, float] | None:
+    """Середина охватывающего прямоугольника участка.
+
+    Настоящий центроид полигона здесь не нужен: точка служит запросом «что
+    разрешено вот тут», и для кадастрового участка центр рамки лежит внутри
+    него в подавляющем большинстве случаев. Считать площадь по этой точке
+    нельзя — для площади есть LEGAL_AREA.
+    """
+    coords = _flatten_coords(geometry.get("coordinates") if geometry else None)
+    if not coords:
+        return None
+    xs = [x for x, _ in coords]
+    ys = [y for _, y in coords]
+    return ((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2)
+
+
+def _flatten_coords(node: Any) -> list[tuple[float, float]]:
+    """Достаёт пары координат из вложенности любой глубины."""
+    if not isinstance(node, (list, tuple)):
+        return []
+    if len(node) == 2 and all(isinstance(v, (int, float)) for v in node):
+        return [(float(node[0]), float(node[1]))]
+    out: list[tuple[float, float]] = []
+    for child in node:
+        out.extend(_flatten_coords(child))
+    return out
+
+
+def _to_parcel(
+    props: dict[str, Any],
+    gush: int,
+    chelka: int,
+    center: tuple[float, float] | None = None,
+) -> Parcel:
     return Parcel(
         gush=str(gush),
         chelka=str(chelka),
@@ -106,6 +149,7 @@ def _to_parcel(props: dict[str, Any], gush: int, chelka: int) -> Parcel:
         county=_clean(props.get("COUNTY_NAM")),
         region=_clean(props.get("REGION_NAM")),
         status=_clean(props.get("STATUS_TEX")),
+        center=center,
     )
 
 

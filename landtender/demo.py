@@ -130,11 +130,17 @@ def _demo_lots() -> list[Lot]:
             purpose="חקלאות — מטעים",
             status="פתוח",
             land_use=AGRICULTURE,
+            zoning="קרקע חקלאית",
             area_sqm=145_000.0,
             price_nis=2_900_000.0,
             price_kind=PRICE_KIND_MIN,
             opening_date="2026-10-12",
             closing_date="2026-11-05",
+            # Поле, которое переводят под застройку: депонированный план и
+            # ссылка на него, чтобы утверждение можно было проверить самому.
+            plan_signal="likely",
+            plan_number="353-0061416",
+            plan_url="https://mavat.iplan.gov.il/SV4/1/3000220263/310",
         ),
         Lot(
             source="rmi_michrazim",

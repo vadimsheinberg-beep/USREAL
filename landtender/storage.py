@@ -39,6 +39,10 @@ CREATE TABLE IF NOT EXISTS lots (
     renewal_kind           TEXT,
     has_structure          INTEGER,
     land_use               TEXT,
+    plan_signal            TEXT,
+    plan_number            TEXT,
+    plan_url               TEXT,
+    zoning                 TEXT,
     units                  INTEGER,
     units_basis            TEXT,
     price_nis              REAL,
@@ -91,6 +95,7 @@ CREATE INDEX IF NOT EXISTS idx_lots_first_seen ON lots(first_seen);
 CREATE INDEX IF NOT EXISTS idx_lots_source ON lots(source);
 CREATE INDEX IF NOT EXISTS idx_lots_renewal ON lots(renewal_kind);
 CREATE INDEX IF NOT EXISTS idx_lots_land_use ON lots(land_use);
+CREATE INDEX IF NOT EXISTS idx_lots_plan_signal ON lots(plan_signal);
 """
 
 #: Поля, изменение которых интересно показать в сводке отдельной строкой.
@@ -100,7 +105,9 @@ _LOT_COLUMNS = (
     "uid", "source", "source_id", "tender_id", "tender_name", "url",
     "settlement", "neighborhood", "region", "gush", "chelka",
     "purpose", "tender_type", "status", "area_sqm", "built_area_sqm",
-    "renewal_kind", "has_structure", "land_use", "units", "units_basis",
+    "renewal_kind", "has_structure", "land_use",
+    "plan_signal", "plan_number", "plan_url", "zoning",
+    "units", "units_basis",
     "price_nis", "price_kind", "development_costs_nis", "guarantee_nis", "price_usd",
     "fx_rate", "fx_date", "price_per_unit_usd", "price_per_sqm_usd", "tier",
     "published_date", "opening_date", "closing_date", "committee_date",

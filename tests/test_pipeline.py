@@ -429,3 +429,55 @@ class TestStaleLandUseIsCorrected:
         storage.commit()
         pipeline.backfill_land_use(storage)
         assert storage.get_lot_row("fake:2")["land_use"] == "agriculture"
+
+
+class TestEnrichmentWiring:
+    """Дополнение включается конфигом и не роняет запуск при отказе сервиса."""
+
+    def config(self, **enrichment):
+        config = make_config()
+        config.data["enrichment"] = dict(enrichment)
+        return config
+
+    def test_disabled_by_default(self, storage):
+        assert pipeline.build_enricher(make_config(), object()) is None
+
+    def test_enabled_builds_an_enricher(self):
+        from tests.conftest import FakeHttp
+
+        enricher = pipeline.build_enricher(self.config(enabled=True, budget=7), FakeHttp({}))
+        assert enricher is not None
+        assert enricher.budget == 7
+
+    def test_signal_reaches_the_lot(self, storage, monkeypatch):
+        from landtender.invest import SIGNAL_CONFIRMED, Insight
+        from landtender.parcels import Parcel
+        from landtender.plans import Plan
+
+        leader = Plan(number="353-0061416", url="https://mavat.iplan.gov.il/x")
+        insight = Insight(
+            parcel=Parcel(gush="1", chelka="2", legal_area_sqm=90_000.0),
+            land_uses=[],
+            signal=SIGNAL_CONFIRMED,
+            leading_plan=leader,
+        )
+
+        class Fake:
+            def enrich(self, lot):
+                return insight
+
+        target = lot(gush="1", chelka="2", area_sqm=1.0)
+        pipeline._apply_insight(target, Fake())
+        assert target.plan_signal == SIGNAL_CONFIRMED
+        assert target.plan_number == "353-0061416"
+        assert target.area_sqm == 90_000.0
+
+    def test_broken_service_does_not_break_the_lot(self, storage):
+        class Broken:
+            def enrich(self, lot):
+                raise RuntimeError("портал недоступен")
+
+        target = lot(area_sqm=4200.0)
+        pipeline._apply_insight(target, Broken())
+        assert target.plan_signal is None
+        assert target.area_sqm == 4200.0

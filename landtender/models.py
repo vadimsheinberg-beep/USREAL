@@ -60,6 +60,14 @@ class Lot:
     has_structure: bool | None = None
     #: Назначение земли: сельхоз, жильё, промышленность… (см. landuse.py).
     land_use: str | None = None
+    #: Смена назначения по реестру планов (см. invest.py): none / early /
+    #: likely / confirmed. Именно она превращает дешёвую землю в дорогую.
+    plan_signal: str | None = None
+    #: Номер и ссылка плана, давшего сигнал, — чтобы можно было проверить.
+    plan_number: str | None = None
+    plan_url: str | None = None
+    #: Назначение по действующему плану («קרקע חקלאית», «מגורים א'»).
+    zoning: str | None = None
     units: int | None = None
     units_basis: str | None = None
 
@@ -111,6 +119,7 @@ class Lot:
             self.status,
             self.area_sqm,
             self.units,
+            self.plan_signal,
             self.price_nis,
             self.price_kind,
             self.development_costs_nis,

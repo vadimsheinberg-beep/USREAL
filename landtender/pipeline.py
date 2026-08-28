@@ -56,6 +56,49 @@ def build_source(name: str, config: Config, http: HttpClient, storage: Storage |
     return SOURCES_BY_NAME[name](ctx)
 
 
+def build_enricher(config: Config, http: HttpClient) -> Any:
+    """Дополнение лотов кадастром и планами, если включено в конфиге.
+
+    По умолчанию выключено: это два-три чужих запроса на лот, и включать их
+    молча в ежедневный обход неправильно.
+    """
+    section = config.section("enrichment")
+    if not section.get("enabled", False):
+        return None
+
+    from .invest import Enricher
+    from .parcels import GovmapParcels
+    from .plans import IplanRegistry
+
+    return Enricher(
+        parcels=GovmapParcels(http),
+        plans=IplanRegistry(http),
+        budget=int(section.get("budget", 40)),
+        only_agricultural=bool(section.get("only_agricultural", False)),
+    )
+
+
+def _apply_insight(lot: Lot, enricher: Any) -> None:
+    """Кадастр и планы для одного лота. Отказ сервиса лот не роняет."""
+    from .invest import SIGNAL_NONE, apply as apply_insight
+
+    try:
+        insight = enricher.enrich(lot)
+    except Exception as exc:  # noqa: BLE001 - сводка важнее одного участка
+        log.warning("Дополнение лота %s не удалось: %s", lot.uid, exc)
+        return
+    if insight is None:
+        return
+
+    apply_insight(lot, insight)
+    lot.zoning = insight.current_use
+    if insight.signal != SIGNAL_NONE:
+        lot.plan_signal = insight.signal
+        if insight.leading_plan is not None:
+            lot.plan_number = insight.leading_plan.number
+            lot.plan_url = insight.leading_plan.url
+
+
 def get_fx(config: Config, http: HttpClient) -> FxRate:
     cache_path = config.db_path.parent / "fx_cache.json"
     provider = FxProvider(
@@ -89,6 +132,8 @@ def run_once(
     settlements = list(config.get("general", "settlements", []) or [])
     today = date.today().isoformat()
 
+    enricher = build_enricher(config, http)
+
     result = RunResult(
         started_at=started_at,
         finished_at=started_at,
@@ -110,6 +155,8 @@ def run_once(
                 if hide_expired and is_expired(lot, today):
                     report.skipped_expired += 1
                     continue
+                if enricher is not None:
+                    _apply_insight(lot, enricher)
                 enrich_lot(lot, fx, threshold, include_dev)
                 if lot.price_usd is None and not keep_priceless:
                     continue

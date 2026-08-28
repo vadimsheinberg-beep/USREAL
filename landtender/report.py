@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 from .models import TIER_PREMIUM, TIER_STANDARD, TIER_UNKNOWN, Lot, RunResult
+from .invest import SIGNAL_BADGES, SIGNAL_CONFIRMED, SIGNAL_LIKELY
 from .landuse import AGRICULTURE
 from .landuse import badge as landuse_badge
 from .renewal import badge as renewal_badge
@@ -93,10 +94,20 @@ def _lot_line_html(lot: Lot) -> str:
     if extra:
         parts.append("  🏦 " + " · ".join(extra))
 
+    # Смена назначения — единственное, что делает дешёвую землю дорогой,
+    # поэтому она идёт отдельной строкой, а не теряется в хвосте.
+    signal = SIGNAL_BADGES.get(lot.plan_signal or "")
+    if signal:
+        plan = escape(lot.plan_number) if lot.plan_number else ""
+        link = f'<a href="{escape(lot.plan_url)}">{plan}</a>' if lot.plan_url and plan else plan
+        parts.append(f"  {signal}" + (f" · {link}" if link else ""))
+
     tail = []
     field = landuse_badge(lot.land_use)
     if field:
         tail.append(field)
+    if lot.zoning:
+        tail.append(escape(lot.zoning))
     mark = renewal_badge(lot.renewal_kind)
     if mark:
         area = f", застройка {lot.built_area_sqm:,.0f} м²".replace(",", " ") if lot.built_area_sqm else ""
@@ -168,6 +179,12 @@ def build_telegram_digest(
     renewal = [lot for lot in result.new_lots if lot.renewal_kind]
     if renewal:
         header.append(f"🏚 Со строениями / под реконструкцию: {len(renewal)}")
+    moving = [
+        lot for lot in result.new_lots
+        if lot.plan_signal in (SIGNAL_LIKELY, SIGNAL_CONFIRMED)
+    ]
+    if moving:
+        header.append(f"📈 Со сменой назначения: {len(moving)}")
     farmland = [lot for lot in result.new_lots if lot.land_use == AGRICULTURE]
     if farmland:
         area = sum(lot.area_sqm or 0 for lot in farmland)
@@ -338,7 +355,9 @@ def build_console_report(
 EXPORT_FIELDS = (
     "uid", "source", "tender_id", "tender_name", "settlement", "neighborhood",
     "gush", "chelka", "purpose", "status", "area_sqm", "built_area_sqm", "renewal_kind",
-    "has_structure", "land_use", "units", "units_basis",
+    "has_structure", "land_use", "zoning",
+    "plan_signal", "plan_number", "plan_url",
+    "units", "units_basis",
     "price_nis", "price_kind", "development_costs_nis", "guarantee_nis", "price_usd", "price_per_unit_usd", "price_per_sqm_usd",
     "tier", "published_date", "opening_date", "closing_date", "url",
 )
