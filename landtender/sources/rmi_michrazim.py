@@ -141,6 +141,14 @@ class RmiMichrazimSource(Source):
                 ", ".join(names), len(tenders), before,
             )
 
+        # Портал отдаёт архив в своём порядке, и начинается он с самых старых
+        # торгов. Пока лимит деталей тратился по этому порядку, три захода
+        # харвеста подряд выбрали 2000-2005 годы и ни одного года новее:
+        # гистограмма сделок показала 3340 записей за пятилетку начала века и
+        # пусто с 2006-го. Для оценки нужны свежие сделки, поэтому детали
+        # добираются от новых торгов к старым.
+        tenders = _newest_first(tenders)
+
         budget = int(self.ctx.option("details_budget", 400))
         codes = self._codes()
         fetched_details = 0
@@ -205,6 +213,25 @@ class RmiMichrazimSource(Source):
 
 
 # ------------------------------------------------------------ разбор ответа --
+
+
+def _newest_first(tenders: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Тендеры от свежих к старым; те, у которых даты нет, — в конце.
+
+    Порядок важен не сам по себе, а потому, что лимит деталей меньше архива:
+    что окажется первым, то и попадёт в базу с ценами.
+    """
+    def key(tender: dict[str, Any]) -> tuple[int, str]:
+        when = (
+            to_iso_date(pick(tender, CLOSING_KEYS))
+            or to_iso_date(pick(tender, PUBLISHED_KEYS))
+        )
+        return (0, when) if when else (1, "")
+
+    dated = [t for t in tenders if key(t)[0] == 0]
+    undated = [t for t in tenders if key(t)[0] == 1]
+    dated.sort(key=lambda t: key(t)[1], reverse=True)
+    return dated + undated
 
 
 def _fingerprint(tender: dict[str, Any]) -> str:

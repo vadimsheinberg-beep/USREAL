@@ -4,6 +4,7 @@ import pytest
 
 from landtender.http import HttpError
 from landtender.sources import RmiMichrazimSource, SourceContext
+from landtender.sources.rmi_michrazim import _newest_first
 from tests.conftest import FakeHttp, load_fixture
 
 
@@ -483,3 +484,40 @@ class TestOpeningDate:
     def test_missing_field_stays_empty(self):
         lot = next(iter(make_source(ROUTES).fetch()))
         assert lot.opening_date is None
+
+
+class TestArchiveOrder:
+    """Лимит деталей меньше архива, поэтому важно, с какого конца его читать.
+
+    Портал отдаёт архив со своего края — самого старого. Три захода харвеста
+    подряд выбрали 2000-2005 годы и ни одного года новее: сделок с ценой в
+    базе накопилось 3340, и все они старше двадцати лет, то есть для оценки
+    бесполезны. Детали добираются от свежих торгов к старым.
+    """
+
+    def test_newest_tenders_come_first(self):
+        rows = [
+            {"MichrazID": 1, "SgiraDate": "2004-05-01T00:00:00"},
+            {"MichrazID": 2, "SgiraDate": "2026-02-01T00:00:00"},
+            {"MichrazID": 3, "SgiraDate": "2015-09-01T00:00:00"},
+        ]
+        assert [t["MichrazID"] for t in _newest_first(rows)] == [2, 3, 1]
+
+    def test_tenders_without_a_date_go_last(self):
+        rows = [{"MichrazID": 1}, {"MichrazID": 2, "SgiraDate": "2020-01-01T00:00:00"}]
+        assert [t["MichrazID"] for t in _newest_first(rows)] == [2, 1]
+
+    def test_nothing_is_lost_in_the_reordering(self):
+        rows = [{"MichrazID": i} for i in range(5)]
+        assert len(_newest_first(rows)) == 5
+
+    def test_a_tight_budget_is_spent_on_the_freshest_tender(self):
+        source = make_source(ROUTES, options={"details_budget": 1})
+        list(source.fetch())
+        detail_calls = [c for c in source.ctx.http.calls if "MichrazDetailsApi" in c[1]]
+        assert len(detail_calls) == 1
+        requested = detail_calls[0][2]["params"]["michrazID"]
+
+        search = load_fixture("rmi_search.json")
+        newest = _newest_first([t for t in search if isinstance(t, dict)])[0]
+        assert str(requested) == str(newest["MichrazID"])

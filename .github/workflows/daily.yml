@@ -22,6 +22,10 @@ on:
         description: "Собрать архив закрытых торгов — база сравнимых сделок"
         type: boolean
         default: false
+      harvest_budget:
+        description: "Сколько тендеров архива добрать деталями за заход (350 ≈ 14 минут)"
+        type: string
+        default: "350"
 
 concurrency:
   group: landtender-daily
@@ -91,7 +95,7 @@ jobs:
         # Сбор накопительный — кеш отпечатков не даёт забирать одно и то же,
         # поэтому каждый следующий запуск добирает новые тендеры.
         if: ${{ github.event.inputs.harvest == 'true' }}
-        run: landtender harvest --budget 350
+        run: landtender harvest --budget "${{ github.event.inputs.harvest_budget || '350' }}"
 
       - name: Сельхозземля — срез всей базы
         env:
