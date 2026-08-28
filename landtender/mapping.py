@@ -98,6 +98,15 @@ IPLAN_LANDUSE_FIELDS = (
 #: он сознательно не трогается: обход защиты доступа нам не нужен.
 NADLAN_DATA = "https://data.nadlan.gov.il/api"
 
+#: CDN отвечает 403 на запрос без происхождения — ровно как портал рм"י.
+#: Это не обход авторизации: заголовки лишь заявляют, чьей страницей мы
+#: притворяемся, а сами файлы отдаются кому угодно с такими заголовками.
+NADLAN_HEADERS = {
+    "Origin": "https://www.nadlan.gov.il",
+    "Referer": "https://www.nadlan.gov.il/",
+    "Accept": "application/json, text/plain, */*",
+}
+
 MAX_JSON_CHARS = 2500
 
 
@@ -301,7 +310,7 @@ def inspect_nadlan(http: HttpClient, settlement_code: str = "5000") -> int:
         print("\n" + "-" * 72)
         print(f"{title}: {url}")
         try:
-            data = http.get_json(url)
+            data = http.get_json(url, headers=NADLAN_HEADERS)
         except HttpError as exc:
             print(f"  ✗ {exc}")
             continue

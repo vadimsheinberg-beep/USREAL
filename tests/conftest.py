@@ -49,6 +49,14 @@ class FakeHttp:
     def post(self, url: str, **kwargs: Any) -> Any:
         return self._resolve("POST", url, **kwargs)
 
+    def get_text(self, url: str, **kwargs: Any) -> Any:
+        return self._resolve("GET", url, **kwargs)
+
+    def use_legacy_tls(self, prefix: str) -> None:
+        """Настоящий клиент переключает шифры; тесту достаточно запомнить."""
+        self.legacy_tls_hosts = getattr(self, "legacy_tls_hosts", [])
+        self.legacy_tls_hosts.append(prefix)
+
 
 @pytest.fixture
 def fx_rate():
