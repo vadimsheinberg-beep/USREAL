@@ -36,6 +36,47 @@ def fmt_nis(value: float | None) -> str:
     return f"{value:,.0f} ₪".replace(",", " ")
 
 
+def fmt_nis_short(value: float | None) -> str:
+    """Сокращённая сумма для однострочной карточки: «18.5 млн ₪».
+
+    В подробной карточке шекели пишутся полностью — там важна точность.
+    В строке-перечислении важнее, чтобы порядок величины читался с одного
+    взгляда, а не подсчитывался по разрядам.
+    """
+    if value is None:
+        return "—"
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:,.1f} млн ₪".replace(",", " ")
+    if value >= 10_000:
+        return f"{value / 1_000:,.0f} тыс ₪".replace(",", " ")
+    return fmt_nis(value)
+
+
+#: Насколько цена должна отличаться от оценки, чтобы это стоило отмечать.
+#: Ближе — разница тонет в погрешности самой модели.
+BARGAIN_RATIO = 0.8
+OVERPRICED_RATIO = 1.25
+
+
+def _price_verdict(lot: Lot) -> str:
+    """«Дёшево» или «дорого» относительно оценки — одной короткой фразой.
+
+    Это главный вывод по лоту: цена сама по себе не говорит ничего, пока не
+    с чем сравнить. Поэтому вердикт есть в обеих формах карточки.
+    """
+    if not (lot.estimate_nis and lot.price_nis):
+        return ""
+    ratio = lot.price_nis / lot.estimate_nis
+    if ratio <= BARGAIN_RATIO:
+        return f"🟢 −{(1 - ratio) * 100:.0f}% к оценке"
+    if ratio >= OVERPRICED_RATIO:
+        return f"🔴 +{(ratio - 1) * 100:.0f}% к оценке"
+    # Цена рядом с оценкой — не новость. Строка «≈ по оценке» стояла бы почти
+    # у каждого лота и превратила бы вердикт в фон, на котором не видно
+    # редких 🟢 и 🔴 — ровно тех, ради которых сводку и читают.
+    return ""
+
+
 def fmt_units(lot: Lot) -> str:
     if lot.units is None:
         return "—"
@@ -131,9 +172,9 @@ def _lot_line_html(lot: Lot) -> str:
         # Сравнение с ценой тендера — то, ради чего оценка и нужна.
         if lot.price_nis:
             ratio = lot.price_nis / lot.estimate_nis
-            if ratio <= 0.8:
+            if ratio <= BARGAIN_RATIO:
                 parts.append(f"  🟢 запрошено на {(1 - ratio) * 100:.0f}% ниже оценки")
-            elif ratio >= 1.25:
+            elif ratio >= OVERPRICED_RATIO:
                 parts.append(f"  🔴 запрошено на {(ratio - 1) * 100:.0f}% выше оценки")
 
     # Запас прочности: до какой суммы можно поднимать заявку и что будет,
@@ -193,6 +234,55 @@ def _lot_line_html(lot: Lot) -> str:
         parts.append("  " + " · ".join(tail))
 
     return "\n".join(parts)
+
+
+#: Сколько лотов в секции показывать подробно. Остальные идут строкой.
+#:
+#: Пока оценка была редкостью, подробная карточка занимала три строки и
+#: длину сводки не определяла. С накопленной базой сравнимых сделок оценку,
+#: ставку и балл получает почти каждый лот, и та же карточка выросла до
+#: десяти строк: шестьдесят лотов — это девять сообщений подряд, в которых
+#: выгодный лот выглядит ровно так же, как проходной. Подробно показываются
+#: те, что стоят наверху по баллу; хвост — строкой, но с вердиктом по цене,
+#: чтобы решение «открывать или нет» принималось прямо в ленте.
+FULL_CARDS = 8
+
+
+def _lot_compact_html(lot: Lot) -> str:
+    """Лот одной строкой: чем он является, сколько стоит и стоит ли смотреть."""
+    name = escape(lot.label)
+    link = f'<a href="{escape(lot.url)}">{name}</a>' if lot.url else name
+
+    facts = []
+    if lot.price_nis:
+        facts.append(fmt_nis_short(lot.price_nis))
+    elif lot.price_usd:
+        facts.append(fmt_usd(lot.price_usd))
+    elif lot.opening_date:
+        facts.append(f"цена с {lot.opening_date}")
+    if lot.units:
+        facts.append(f"{fmt_units(lot)} ед.")
+    if lot.area_sqm:
+        facts.append(fmt_area(lot.area_sqm))
+
+    head = f"• {link}{_score_badge(lot)}"
+    if facts:
+        head += " · " + " · ".join(facts)
+
+    tail = []
+    verdict = _price_verdict(lot)
+    if verdict:
+        tail.append(verdict)
+    field = landuse_badge(lot.land_use)
+    if field:
+        tail.append(field)
+    signal = SIGNAL_BADGES.get(lot.plan_signal or "")
+    if signal:
+        tail.append(signal)
+    if lot.closing_date:
+        tail.append(f"до {lot.closing_date}")
+
+    return head + ("\n  " + " · ".join(tail) if tail else "")
 
 
 def _change_line_html(lot: Lot, changes: dict[str, Any]) -> str:
@@ -284,9 +374,14 @@ def build_telegram_digest(
         farm = sum(1 for lot in lots if lot.land_use == AGRICULTURE)
         if farm:
             title += f", сельхоз: {farm}"
+        shown = lots[:max_per_tier]
+        if len(shown) > FULL_CARDS:
+            title += f"\nПодробно — первые {FULL_CARDS} по баллу, остальные строкой"
         lines = [title]
-        for lot in lots[:max_per_tier]:
-            lines.append(_lot_line_html(lot))
+        for position, lot in enumerate(shown):
+            lines.append(
+                _lot_line_html(lot) if position < FULL_CARDS else _lot_compact_html(lot)
+            )
         if len(lots) > max_per_tier:
             lines.append(f"…и ещё {len(lots) - max_per_tier} — полный список в CSV")
         blocks.append("\n".join(lines))
@@ -342,9 +437,14 @@ def build_farmland_digest(
 
     blocks = ["\n".join(header)]
     ordered = sort_by_price(lots)
+    shown = ordered[:max_lots]
     lines = []
-    for lot in ordered[:max_lots]:
-        lines.append(_lot_line_html(lot))
+    if len(shown) > FULL_CARDS:
+        lines.append(f"Подробно — первые {FULL_CARDS} по баллу, остальные строкой")
+    for position, lot in enumerate(shown):
+        lines.append(
+            _lot_line_html(lot) if position < FULL_CARDS else _lot_compact_html(lot)
+        )
     if len(ordered) > max_lots:
         lines.append(f"…и ещё {len(ordered) - max_lots}")
     blocks.append("\n".join(lines))

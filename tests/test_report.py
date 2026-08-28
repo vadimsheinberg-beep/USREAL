@@ -5,12 +5,14 @@ import json
 from landtender.models import TIER_PREMIUM, TIER_STANDARD, TIER_UNKNOWN, Lot, RunResult, SourceReport
 from landtender.notify.telegram import chunk_blocks
 from landtender.report import (
+    FULL_CARDS,
     build_console_report,
     build_farmland_digest,
     build_telegram_digest,
     export_csv,
     export_json,
     fmt_area,
+    fmt_nis_short,
     fmt_usd,
     split_by_tier,
 )
@@ -474,3 +476,93 @@ class TestScoreAndBid:
         path = export_csv([self.scored()], tmp_path / "s.csv")
         text = path.read_text("utf-8")
         assert "score_total" in text and "max_bid_nis" in text
+
+
+class TestCompactCards:
+    """Две формы карточки: подробно — верхние, строкой — хвост.
+
+    Пока оценка была редкостью, все лоты помещались в подробную форму. С
+    накопленной базой сравнимых сделок оценку, ставку и балл получает почти
+    каждый, и шестьдесят десятистрочных карточек превращают сводку в стену,
+    где выгодный лот неотличим от проходного.
+    """
+
+    def many(self, count):
+        return result(new_lots=[
+            lot(source_id=str(i), tender_name=f"{100 + i}/2026",
+                score_total=float(100 - i), price_nis=1_000_000.0 * (i + 1),
+                price_usd=300_000.0 * (i + 1))
+            for i in range(count)
+        ])
+
+    def text(self, count):
+        return "\n".join(build_telegram_digest(
+            self.many(count), 1_000_000, max_per_tier=count, split_by_threshold=False
+        ))
+
+    def test_top_lots_keep_the_full_card(self):
+        """У верхних лотов подробная карточка узнаётся по строке единиц."""
+        assert self.text(20).count("🏘 единиц:") == FULL_CARDS
+
+    def test_the_tail_is_one_line_each(self):
+        text = self.text(20)
+        assert "• <a" in text
+        # Хвост не потерян: лотов по-прежнему двадцать, просто короче.
+        assert text.count("• <a") == 20
+
+    def test_short_digest_shows_everything_in_full(self):
+        assert self.text(FULL_CARDS).count("🏘 единиц:") == FULL_CARDS
+
+    def test_reader_is_told_about_the_split(self):
+        assert f"Подробно — первые {FULL_CARDS} по баллу" in self.text(20)
+        assert "Подробно — первые" not in self.text(3)
+
+    def test_compact_card_carries_price_and_score(self):
+        line = [ln for ln in self.text(20).split("\n") if "119/2026" in ln][0]
+        assert "[81" in line and "млн ₪" in line
+
+    def test_a_long_digest_fits_in_far_fewer_messages(self):
+        """Шестьдесят лотов должны читаться, а не листаться девятью экранами."""
+        blocks = build_telegram_digest(
+            self.many(60), 1_000_000, max_per_tier=60, split_by_threshold=False
+        )
+        assert len(chunk_blocks(blocks)) <= 5
+
+
+class TestPriceVerdict:
+    """Вердикт по цене — единственный вывод, который виден и в короткой форме."""
+
+    def compact(self, **kw):
+        data = dict(estimate_nis=10_000_000.0, score_total=10.0)
+        data.update(kw)
+        lots = [lot(source_id=str(i), score_total=float(90 - i)) for i in range(FULL_CARDS)]
+        lots.append(lot(source_id="tail", tender_name="хвост/2026", **data))
+        text = "\n".join(build_telegram_digest(
+            result(new_lots=lots), 1_000_000, max_per_tier=99, split_by_threshold=False
+        ))
+        return [ln for ln in text.split("\n") if "хвост" in ln or "к оценке" in ln]
+
+    def test_bargain_shows_in_the_compact_line(self):
+        assert any("🟢 −45% к оценке" in ln for ln in self.compact(price_nis=5_500_000.0))
+
+    def test_overpriced_shows_in_the_compact_line(self):
+        assert any("🔴 +50% к оценке" in ln for ln in self.compact(price_nis=15_000_000.0))
+
+    def test_price_near_the_estimate_says_nothing(self):
+        """Строка «примерно по оценке» стояла бы почти всюду и стала бы фоном."""
+        lines = self.compact(price_nis=9_500_000.0)
+        assert not any("к оценке" in ln for ln in lines)
+
+
+class TestFmtNisShort:
+    def test_millions(self):
+        assert fmt_nis_short(18_500_000.0) == "18.5 млн ₪"
+
+    def test_thousands(self):
+        assert fmt_nis_short(840_000.0) == "840 тыс ₪"
+
+    def test_small_sums_stay_exact(self):
+        assert fmt_nis_short(4_200.0) == "4 200 ₪"
+
+    def test_missing(self):
+        assert fmt_nis_short(None) == "—"
