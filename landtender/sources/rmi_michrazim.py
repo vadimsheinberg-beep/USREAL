@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Iterable
 
 from ..extract import (
@@ -150,10 +151,22 @@ class RmiMichrazimSource(Source):
         tenders = _newest_first(tenders)
 
         budget = int(self.ctx.option("details_budget", 400))
+        # Ограничение по времени, а не только по числу тендеров. Заход на 1000
+        # тендеров упёрся в лимит задания, был снят на 60-й минуте, и шаг
+        # сохранения базы не выполнился: час работы пропал целиком. Счётчик
+        # тендеров не годится в предохранители, потому что скорость ответа
+        # портала заранее не известна; часы годятся. По истечении срока обход
+        # прекращается, и всё собранное к этому моменту попадает в базу.
+        seconds = float(self.ctx.option("details_time_budget_sec", 0) or 0)
+        deadline = time.monotonic() + seconds if seconds > 0 else None
         codes = self._codes()
         fetched_details = 0
+        out_of_time = False
 
         for tender in tenders:
+            if deadline is not None and time.monotonic() >= deadline:
+                out_of_time = True
+                break
             meta = _tender_meta(tender, codes)
             tender_id = meta.get("tender_id")
             if not tender_id:
@@ -186,7 +199,13 @@ class RmiMichrazimSource(Source):
             if self.ctx.cache is not None and details is not None:
                 self.ctx.cache.remember_tender(self.name, tender_id, fingerprint)
 
-        if fetched_details >= budget:
+        if out_of_time:
+            log.warning(
+                'рм"י: вышло время (%.0f мин), успели %d тендеров — остальные добираются '
+                "в следующий заход",
+                seconds / 60, fetched_details,
+            )
+        elif fetched_details >= budget:
             log.warning(
                 'рм"י: достигнут лимит details_budget=%d, часть цен будет добрана в следующий запуск',
                 budget,

@@ -91,9 +91,14 @@ def build_parser() -> argparse.ArgumentParser:
         "harvest", help="собрать архив закрытых торгов — база сравнимых сделок"
     )
     harvest_cmd.add_argument(
-        "--budget", type=int, default=350,
-        help="сколько тендеров догрузить деталями за один заход "
+        "--budget", type=int, default=3000,
+        help="потолок по числу тендеров за заход "
              "(сбор накопительный: следующий запуск добирает остальные)",
+    )
+    harvest_cmd.add_argument(
+        "--minutes", type=float, default=35.0,
+        help="сколько минут ходить за деталями; по истечении срока обход "
+             "прекращается, и собранное сохраняется (0 — без ограничения)",
     )
 
     sub.add_parser("stats", help="показать состояние базы и последний запуск")
@@ -360,7 +365,11 @@ def cmd_harvest(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     # Архив: не только действующие тендеры, и сроки подачи давно прошли.
     config.data.setdefault("sources", {}).setdefault("rmi_michrazim", {}).update(
-        {"active_only": False, "details_budget": args.budget}
+        {
+            "active_only": False,
+            "details_budget": args.budget,
+            "details_time_budget_sec": args.minutes * 60,
+        }
     )
     config.data.setdefault("general", {})["hide_expired"] = False
     config.data.setdefault("valuation", {})["estimate"] = False

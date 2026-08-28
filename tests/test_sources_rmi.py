@@ -521,3 +521,29 @@ class TestArchiveOrder:
         search = load_fixture("rmi_search.json")
         newest = _newest_first([t for t in search if isinstance(t, dict)])[0]
         assert str(requested) == str(newest["MichrazID"])
+
+
+class TestTimeBudget:
+    """Предохранитель по часам, а не по числу тендеров.
+
+    Заход на 1000 тендеров упёрся в лимит задания и был снят на 60-й минуте.
+    Шаг сохранения базы при этом не выполнился, и час сбора пропал целиком.
+    Скорость ответа портала заранее не известна, поэтому счётчик тендеров в
+    предохранители не годится — годятся часы.
+    """
+
+    def test_expired_budget_stops_the_walk(self):
+        source = make_source(ROUTES, options={"details_time_budget_sec": 0.0000001})
+        lots = list(source.fetch())
+        detail_calls = [c for c in source.ctx.http.calls if "MichrazDetailsApi" in c[1]]
+        assert detail_calls == []
+        assert lots == []
+
+    def test_without_a_budget_nothing_changes(self):
+        source = make_source(ROUTES)
+        assert len(list(source.fetch())) > 0
+
+    def test_a_generous_budget_lets_everything_through(self):
+        source = make_source(ROUTES, options={"details_time_budget_sec": 600})
+        detail_calls_before = len(list(source.fetch()))
+        assert detail_calls_before == len(list(make_source(ROUTES).fetch()))
