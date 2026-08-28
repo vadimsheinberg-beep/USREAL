@@ -161,6 +161,25 @@ class TestEstimate:
         assert value is not None and value.method == "regression"
 
     def test_interval_is_reported_with_the_estimate(self):
-        value = estimate(deal(area=1000.0), pool(30))
+        # Идентификатор вне выборки: свои сделки из неё исключаются.
+        value = estimate(deal("новый", area=1000.0), pool(30))
         assert value.spread_ratio > 1.0
         assert value.n == 30
+
+
+class TestSelfExclusion:
+    """Сделка не может объяснять собственную цену."""
+
+    def test_own_deal_is_dropped_from_the_pool(self):
+        comps = pool(20)
+        target = deal(comps[0].source_id, area=comps[0].area_sqm)
+        assert all(c.source_id != target.source_id for c in nearby(comps, target))
+
+    def test_pool_shrinks_by_exactly_one(self):
+        comps = pool(20)
+        target = deal(comps[3].source_id)
+        assert len(nearby(comps, target)) == len(comps) - 1
+
+    def test_other_lots_are_untouched(self):
+        comps = pool(20)
+        assert len(nearby(comps, deal("не из выборки"))) == len(comps)

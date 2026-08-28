@@ -139,13 +139,17 @@ def nearby(comparables: list[Comparable], lot: Lot) -> list[Comparable]:
     назначения по всей выборке — лучше широкая база, чем оценка по трём
     точкам.
     """
+    # Сделка не может быть сравнимой сама себе. Закрытый тендер попадает и в
+    # выборку, и на оценку: без этого он объяснял бы собственную цену.
+    pool = [c for c in comparables if c.source_id != lot.source_id]
+
     if lot.settlement:
-        same_city = [c for c in comparables if c.settlement == lot.settlement]
+        same_city = [c for c in pool if c.settlement == lot.settlement]
         if len(same_city) >= MIN_COMPARABLES:
             return same_city
 
-    same_use = [c for c in comparables if c.land_use == lot.land_use]
-    return same_use if len(same_use) >= MIN_COMPARABLES else comparables
+    same_use = [c for c in pool if c.land_use == lot.land_use]
+    return same_use if len(same_use) >= MIN_COMPARABLES else pool
 
 
 def estimate(lot: Lot, comparables: list[Comparable]) -> Valuation | None:
