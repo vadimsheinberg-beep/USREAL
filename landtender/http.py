@@ -7,14 +7,42 @@ import time
 from typing import Any
 
 import requests
+import ssl
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from urllib3.util.ssl_ import create_urllib3_context
 
 log = logging.getLogger(__name__)
 
 
 class HttpError(RuntimeError):
     """Сетевой сбой источника — ловится на уровне источника, запуск не падает."""
+
+
+class LegacyTlsAdapter(HTTPAdapter):
+    """Адаптер для серверов со старым набором шифров.
+
+    Часть израильских ведомственных серверов (ags.iplan.gov.il) отвечает на
+    современный ClientHello алертом ``SSLV3_ALERT_HANDSHAKE_FAILURE``: общих
+    шифров с ними у OpenSSL 3 при уровне безопасности по умолчанию нет.
+
+    ``SECLEVEL=1`` разрешает эти шифры. Проверка сертификата при этом
+    остаётся включённой — ослабляется набор шифров, а не подлинность узла.
+    Отключать проверку сертификатов нельзя ни при каких условиях.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self._ssl_context = create_urllib3_context(ciphers="DEFAULT@SECLEVEL=1")
+        self._ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
+        super().__init__(*args, **kwargs)
+
+    def init_poolmanager(self, *args: Any, **kwargs: Any) -> Any:
+        kwargs["ssl_context"] = self._ssl_context
+        return super().init_poolmanager(*args, **kwargs)
+
+    def proxy_manager_for(self, *args: Any, **kwargs: Any) -> Any:
+        kwargs["ssl_context"] = self._ssl_context
+        return super().proxy_manager_for(*args, **kwargs)
 
 
 class HttpClient:
@@ -43,6 +71,7 @@ class HttpClient:
             allowed_methods=frozenset({"GET", "POST"}),
             raise_on_status=False,
         )
+        self._retry = retry
         adapter = HTTPAdapter(max_retries=retry)
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
@@ -75,6 +104,15 @@ class HttpClient:
 
     def post(self, url: str, **kwargs: Any) -> requests.Response:
         return self.request("POST", url, **kwargs)
+
+    def use_legacy_tls(self, prefix: str) -> None:
+        """Переводит один хост на старый набор шифров.
+
+        Точечно: остальные адреса продолжают ходить с настройками по
+        умолчанию, послаблением пользуется только тот сервер, который иначе
+        вообще не отвечает.
+        """
+        self.session.mount(prefix, LegacyTlsAdapter(max_retries=self._retry))
 
     def get_text(self, url: str, **kwargs: Any) -> str:
         """Ответ как текст — для XML вроде WFS GetCapabilities."""

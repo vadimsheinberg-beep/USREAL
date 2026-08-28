@@ -61,6 +61,41 @@ def _head(title: str) -> None:
 # ============================================================== iplan =======
 
 
+#: Куда ещё мог переехать сервис. Путь ArcGIS у ведомств отличается
+#: (``/arcgisiplan/`` против обычного ``/arcgis/``), а имя сервиса менялось.
+IPLAN_VARIANTS: tuple[str, ...] = (
+    IPLAN_XPLAN,
+    "https://ags.iplan.gov.il/arcgis/rest/services/PlanningPublic/Xplan/MapServer",
+    "https://ags.iplan.gov.il/arcgisiplan/rest/services/PlanningPublic/XplanPublic/MapServer",
+    "https://ags.iplan.gov.il/arcgisiplan/rest/services/PlanningPublic/Xplan/FeatureServer",
+)
+
+
+def _reach_iplan(http: HttpClient) -> tuple[str, Any] | None:
+    """Находит рабочий адрес сервиса, пробуя обычный TLS и старый набор шифров.
+
+    Сервер отвечал ``SSLV3_ALERT_HANDSHAKE_FAILURE``, поэтому проверяем не
+    только адреса, но и настройку TLS — иначе непонятно, что именно сломано:
+    адрес, шифры или сам сервис.
+    """
+    for legacy in (False, True):
+        if legacy:
+            print("\n… обычный TLS не прошёл, пробую старый набор шифров")
+            http.use_legacy_tls("https://ags.iplan.gov.il")
+        for url in IPLAN_VARIANTS:
+            try:
+                data = http.get_json(url, params={"f": "json"})
+            except HttpError as exc:
+                print(f"  ✗ {url}\n      {exc}")
+                continue
+            if isinstance(data, dict) and data.get("error"):
+                print(f"  ✗ {url} → ошибка сервиса: {data['error']}")
+                continue
+            print(f"  ✓ {url}" + (" (старый TLS)" if legacy else ""))
+            return url, data
+    return None
+
+
 def inspect_iplan(http: HttpClient, gush: str | None = None) -> int:
     """Слои реестра планов и настоящие имена их полей.
 
@@ -69,11 +104,11 @@ def inspect_iplan(http: HttpClient, gush: str | None = None) -> int:
     """
     _head("РАЗВЕДКА IPLAN (реестр планов, ArcGIS REST)")
 
-    try:
-        service = http.get_json(IPLAN_XPLAN, params={"f": "json"})
-    except HttpError as exc:
-        print(f"✗ Сервис не отвечает: {exc}")
+    reached = _reach_iplan(http)
+    if reached is None:
+        print("\n✗ Ни один адрес сервиса не ответил.")
         return 1
+    base, service = reached
 
     layers = (service or {}).get("layers") or []
     print(f"\nСлоёв в сервисе: {len(layers)}")
@@ -89,7 +124,7 @@ def inspect_iplan(http: HttpClient, gush: str | None = None) -> int:
         print("\n" + "-" * 72)
         print(f"Слой {layer_id}: {layer.get('name')}")
         try:
-            meta = http.get_json(f"{IPLAN_XPLAN}/{layer_id}", params={"f": "json"})
+            meta = http.get_json(f"{base}/{layer_id}", params={"f": "json"})
         except HttpError as exc:
             print(f"  ✗ описание недоступно: {exc}")
             continue
@@ -111,7 +146,7 @@ def inspect_iplan(http: HttpClient, gush: str | None = None) -> int:
         "where": f"gush_num={gush}" if gush else "objectid>0",
     }
     try:
-        sample = http.get_json(f"{IPLAN_XPLAN}/1/query", params=params)
+        sample = http.get_json(f"{base}/1/query", params=params)
     except HttpError as exc:
         print(f"  ✗ запрос не прошёл: {exc}")
         return 1
