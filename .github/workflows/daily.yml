@@ -23,9 +23,9 @@ on:
         type: boolean
         default: false
       harvest_minutes:
-        description: "Сколько минут собирать архив (лимит задания — 60 минут)"
+        description: "Сколько минут собирать архив (лимит задания — 180 минут)"
         type: string
-        default: "35"
+        default: "165"
 
 concurrency:
   group: landtender-daily
@@ -34,7 +34,11 @@ concurrency:
 jobs:
   collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Шесть часов — потолок GitHub для задания; берём половину. Ежедневному
+    # сбору хватает и минуты, длинный лимит нужен архиву: сбор ограничен
+    # собственными часами (--minutes) и завершается сам, а лимит задания —
+    # аварийный предохранитель, при срабатывании которого база не сохраняется.
+    timeout-minutes: 180
 
     steps:
       - uses: actions/checkout@v4
@@ -95,7 +99,7 @@ jobs:
         # Сбор накопительный — кеш отпечатков не даёт забирать одно и то же,
         # поэтому каждый следующий запуск добирает новые тендеры.
         if: ${{ github.event.inputs.harvest == 'true' }}
-        run: landtender harvest --minutes "${{ github.event.inputs.harvest_minutes || '35' }}"
+        run: landtender harvest --minutes "${{ github.event.inputs.harvest_minutes || '165' }}"
 
       - name: Сельхозземля — срез всей базы
         env:

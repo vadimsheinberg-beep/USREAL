@@ -96,7 +96,7 @@ def build_parser() -> argparse.ArgumentParser:
              "(сбор накопительный: следующий запуск добирает остальные)",
     )
     harvest_cmd.add_argument(
-        "--minutes", type=float, default=35.0,
+        "--minutes", type=float, default=165.0,
         help="сколько минут ходить за деталями; по истечении срока обход "
              "прекращается, и собранное сохраняется (0 — без ограничения)",
     )
