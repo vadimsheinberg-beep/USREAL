@@ -263,11 +263,11 @@ class ScorableSource(Source):
     def fetch(self):
         return [
             Lot(source="fake", source_id="1", tender_name="плотный",
-                area_sqm=1_000.0, units=40, price_nis=9_000_000.0,
-                closing_date="2099-01-01"),
+                settlement="חיפה", area_sqm=1_000.0, units=40,
+                price_nis=9_000_000.0, closing_date="2099-01-01"),
             Lot(source="fake", source_id="2", tender_name="редкий",
-                area_sqm=10_000.0, units=4, price_nis=3_000_000.0,
-                closing_date="2099-01-01"),
+                settlement="חיפה", area_sqm=10_000.0, units=4,
+                price_nis=3_000_000.0, closing_date="2099-01-01"),
         ]
 
 
@@ -282,7 +282,14 @@ class TestTopCommand:
     @pytest.fixture(autouse=True)
     def scorable(self, monkeypatch):
         # Сравнимые сделки берутся из базы, но за индексом ЦСБ ходят в сеть.
-        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: [])
+        # Пустой список означал бы «оценки нет», а без неё лот в рейтинг не
+        # попадает — фикстуре нужны настоящие сделки.
+        from tests.test_pipeline import comparables_for
+
+        monkeypatch.setattr(
+            pipeline, "build_appraiser", lambda *a, **k: comparables_for("חיפה")
+        )
+        monkeypatch.setattr(pipeline, "backfill_settlement_codes", lambda *a, **k: 0)
         monkeypatch.setattr(pipeline, "SOURCES_BY_NAME", {"fake": ScorableSource})
         monkeypatch.setattr(cli, "SOURCES_BY_NAME", {"fake": ScorableSource})
 
@@ -295,10 +302,12 @@ class TestTopCommand:
         assert cli.main(["--config", str(config_file), "top"]) == 0
         out = capsys.readouterr().out
         assert "Лучшие предложения — топ-2" in out
-        # Первое место занято, и занято плотным участком: при прочих равных
-        # сорок квартир на дунам стоят больше четырёх.
         assert "<b>1.</b>" in out
-        assert out.index("плотный") < out.index("редкий")
+        # Порядок решает показатель цены: он весит больше остальных, потому
+        # что единственный измеряется в деньгах. Плотный участок запрошен
+        # дороже своей оценки и уступает место, несмотря на полный балл за
+        # плотность, — ровно этого от рейтинга предложений и ждут.
+        assert out.index("редкий") < out.index("плотный")
 
     def test_empty_database_explains_itself(self, config_file, capsys):
         assert cli.main(["--config", str(config_file), "top"]) == 0

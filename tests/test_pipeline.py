@@ -483,6 +483,28 @@ class TestEnrichmentWiring:
         assert target.area_sqm == 4200.0
 
 
+
+def comparables_for(city="חיפה", n=30):
+    """Сравнимые сделки, на которых оценка действительно считается.
+
+    Пустой список сравнимых означает «оценки нет», а без оценки лот не
+    попадает в рейтинг — это и есть проверяемое правило, поэтому фикстуре
+    нужны настоящие сделки.
+    """
+    from landtender.valuation import collect_comparables
+
+    rows = []
+    for i in range(n):
+        area = 400.0 + i * 300
+        per_sqm = 9000 * area ** -0.25
+        rows.append(Lot(
+            source="rmi_michrazim", source_id=f"сделка-{i}", settlement=city,
+            area_sqm=area, price_nis=per_sqm * area, price_kind="final",
+            closing_date="2025-06-01",
+        ))
+    return collect_comparables(rows)
+
+
 class TestTopLots:
     """Топ строится на сегодняшних сравнимых, а не на числах дня загрузки.
 
@@ -505,11 +527,11 @@ class TestTopLots:
         """Сохранённый балл не должен решать место в рейтинге."""
         self.store(storage, [
             lot(source_id="устаревший", score_total=99.0, area_sqm=1000.0,
-                closing_date="2027-01-01"),
+                settlement="חיפה", closing_date="2027-01-01"),
             lot(source_id="свежий", score_total=1.0, area_sqm=1000.0,
-                closing_date="2027-01-01"),
+                settlement="חיפה", closing_date="2027-01-01"),
         ])
-        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: [])
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: comparables_for())
         top = pipeline.top_lots(self.config(), object(), storage, limit=10)
         assert all(item.score_total != 99.0 for item in top)
 
@@ -523,11 +545,11 @@ class TestTopLots:
         """
         self.store(storage, [
             lot(source_id="без цены", price_nis=None, area_sqm=1000.0, units=40,
-                closing_date="2027-01-01"),
+                settlement="חיפה", closing_date="2027-01-01"),
             lot(source_id="с ценой", price_nis=5_000_000.0, area_sqm=1000.0, units=40,
-                closing_date="2027-01-01"),
+                settlement="חיפה", closing_date="2027-01-01"),
         ])
-        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: [])
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: comparables_for())
         ids = {item.source_id for item in pipeline.top_lots(self.config(), object(), storage)}
         assert ids == {"с ценой"}
 
@@ -539,27 +561,66 @@ class TestTopLots:
 
     def test_expired_tenders_are_hidden_by_default(self, storage, monkeypatch):
         self.store(storage, [
-            lot(source_id="просрочен", closing_date="2020-01-01", area_sqm=1000.0),
-            lot(source_id="открыт", closing_date="2027-01-01", area_sqm=1000.0),
+            lot(source_id="просрочен", closing_date="2020-01-01", area_sqm=1000.0,
+                settlement="חיפה"),
+            lot(source_id="открыт", closing_date="2027-01-01", area_sqm=1000.0,
+                settlement="חיפה"),
         ])
-        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: [])
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: comparables_for())
         ids = {item.source_id for item in pipeline.top_lots(self.config(), object(), storage)}
         assert "просрочен" not in ids
 
     def test_closed_tenders_can_be_included(self, storage, monkeypatch):
         self.store(storage, [lot(source_id="просрочен", closing_date="2020-01-01",
-                                 area_sqm=1000.0)])
-        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: [])
+                                 area_sqm=1000.0, settlement="חיפה")])
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: comparables_for())
         top = pipeline.top_lots(self.config(), object(), storage, only_active=False)
         assert [item.source_id for item in top] == ["просрочен"]
 
     def test_limit_is_respected_and_order_is_by_score(self, storage, monkeypatch):
         self.store(storage, [
-            lot(source_id=str(i), units=i * 10, area_sqm=1000.0, closing_date="2027-01-01")
+            lot(source_id=str(i), units=i * 10, area_sqm=1000.0, settlement="חיפה",
+                closing_date="2027-01-01")
             for i in range(1, 6)
         ])
-        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: [])
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: comparables_for())
         top = pipeline.top_lots(self.config(), object(), storage, limit=3)
         assert len(top) == 3
         scores = [item.score_total for item in top]
         assert scores == sorted(scores, reverse=True)
+
+
+class TestPriceIndicatorIsMandatory:
+    """Рейтинг обязан опираться на сравнение цены с рынком.
+
+    Без показателя цены балл считается по «бесплатным» слагаемым — сроку
+    подачи и плотности. На настоящей базе это дало десять первых мест с
+    баллом 100, посчитанным по одному показателю: наверх вышли лоты, о
+    которых известно меньше всего. Ранжировать полноту наших сведений вместо
+    самих предложений — не то, ради чего рейтинг существует.
+    """
+
+    def config(self):
+        config = make_config()
+        config.data.setdefault("valuation", {})["estimate"] = True
+        return config
+
+    def test_a_lot_without_an_estimate_never_places(self, storage, monkeypatch):
+        storage.upsert_lot(
+            lot(source_id="без оценки", settlement=None, area_sqm=1000.0,
+                units=40, price_nis=5_000_000.0, closing_date="2027-01-01"),
+            "2026-08-30T00:00:00+00:00",
+        )
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: comparables_for())
+        assert pipeline.top_lots(self.config(), object(), storage) == []
+
+    def test_a_lot_with_an_estimate_places(self, storage, monkeypatch):
+        storage.upsert_lot(
+            lot(source_id="с оценкой", settlement="חיפה", area_sqm=1000.0,
+                units=40, price_nis=5_000_000.0, closing_date="2027-01-01"),
+            "2026-08-30T00:00:00+00:00",
+        )
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: comparables_for())
+        top = pipeline.top_lots(self.config(), object(), storage)
+        assert [item.source_id for item in top] == ["с оценкой"]
+        assert top[0].score_price is not None
