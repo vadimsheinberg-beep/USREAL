@@ -18,9 +18,13 @@ on:
         type: boolean
         default: false
       ckan_query:
-        description: "Разведать наборы data.gov.il по этому запросу (вместо рм\"י)"
+        description: "Разведать наборы data.gov.il; запросов можно несколько через запятую"
         type: string
         default: ""
+      ckan_catalogue:
+        description: "Напечатать весь каталог data.gov.il — без догадок о терминах"
+        type: boolean
+        default: false
       service:
         description: "Разведать карт-сервис вместо рм\"י"
         type: choice
@@ -63,6 +67,7 @@ jobs:
           LIMIT: ${{ github.event.inputs.limit }}
           ALL_TENDERS: ${{ github.event.inputs.all_tenders }}
           CKAN_QUERY: ${{ github.event.inputs.ckan_query }}
+          CKAN_CATALOGUE: ${{ github.event.inputs.ckan_catalogue }}
           SERVICE: ${{ github.event.inputs.service }}
           GUSH: ${{ github.event.inputs.gush }}
           HELKA: ${{ github.event.inputs.helka }}
@@ -72,6 +77,10 @@ jobs:
             [ -n "$GUSH" ] && args="$args --gush $GUSH"
             [ -n "$HELKA" ] && args="$args --helka $HELKA"
             landtender inspect --service "$SERVICE" $args
+            exit $?
+          fi
+          if [ "$CKAN_CATALOGUE" = "true" ]; then
+            landtender inspect --ckan-catalogue
             exit $?
           fi
           if [ -n "$CKAN_QUERY" ]; then

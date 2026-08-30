@@ -198,63 +198,112 @@ def inspect_tenders(
 # --------------------------------------------------- разведка наборов CKAN --
 
 
+def ckan_catalogue(http: HttpClient, limit: int = 2000) -> int:
+    """Печатает весь каталог наборов: имя и заголовок.
+
+    Разведка по одному запросу — плохой инструмент: ивритские термины
+    приходится угадывать, и каждая догадка стоит отдельного прогона. Запрос
+    «עסקאות נדלן» вернул ноль наборов только потому, что в написании потерян
+    гершаим. Полный список отвечает сразу и без догадок.
+    """
+    from .sources.data_gov_il import PACKAGE_SEARCH_URL
+
+    print("=" * 72)
+    print("КАТАЛОГ НАБОРОВ data.gov.il")
+    print("=" * 72)
+
+    try:
+        data = http.get_json(
+            PACKAGE_SEARCH_URL, params={"q": "*:*", "rows": limit}
+        )
+    except HttpError as exc:
+        print(f"✗ Каталог не отвечает: {exc}")
+        return 1
+
+    result = (data or {}).get("result", {})
+    packages = result.get("results", []) or []
+    print(f"\nВсего наборов: {result.get('count', '?')}, показано: {len(packages)}\n")
+    for package in packages:
+        stored = sum(
+            1 for r in (package.get("resources") or [])
+            if r.get("datastore_active")
+        )
+        mark = f"[{stored}]" if stored else "[ ]"
+        print(f"{mark} {package.get('name')} · {package.get('title')}")
+    print("\nВ квадратных скобках — сколько ресурсов доступно через datastore.")
+    return 0
+
+
 def inspect_ckan(http: HttpClient, query: str, limit: int = 2) -> int:
     """Показывает настоящие названия колонок в наборах data.gov.il.
 
     Нужна ровно затем же, зачем разведка портала рм"י: ивритские заголовки
     колонок угадать нельзя, их надо увидеть.
+
+    Запросов можно перечислить несколько через запятую: каждый проверяется
+    отдельно, и видно, какой из них попал. Одна догадка на прогон — слишком
+    дорогая цена за термин, который пишут четырьмя способами.
     """
     from .sources.data_gov_il import DATASTORE_SEARCH_URL, PACKAGE_SEARCH_URL
 
-    print("=" * 72)
-    print(f"РАЗВЕДКА НАБОРОВ CKAN: {query!r}")
-    print("=" * 72)
-
-    try:
-        data = http.get_json(PACKAGE_SEARCH_URL, params={"q": query, "rows": 20})
-    except HttpError as exc:
-        print(f"✗ Поиск наборов не отвечает: {exc}")
-        return 1
-
-    packages = (data or {}).get("result", {}).get("results", [])
-    print(f"\nНайдено наборов: {len(packages)}")
+    queries = [q.strip() for q in query.split(",") if q.strip()]
+    if len(queries) > 1:
+        print("=" * 72)
+        print("ПОИСК ПО НЕСКОЛЬКИМ ЗАПРОСАМ")
+        print("=" * 72)
 
     shown = 0
-    for package in packages:
-        resources = [
-            r for r in (package.get("resources") or [])
-            if r.get("datastore_active") and r.get("id")
-        ]
-        if not resources:
+    for one in queries:
+        print("\n" + "=" * 72)
+        print(f"РАЗВЕДКА НАБОРОВ CKAN: {one!r}")
+        print("=" * 72)
+
+        try:
+            data = http.get_json(PACKAGE_SEARCH_URL, params={"q": one, "rows": 20})
+        except HttpError as exc:
+            print(f"✗ Поиск наборов не отвечает: {exc}")
             continue
 
-        print("\n" + "-" * 72)
-        print(f"Набор: {package.get('title') or package.get('name')}")
-        print(f"  id: {package.get('name')}")
-        print(f"  описание: {(package.get('notes') or '')[:200]}")
+        packages = (data or {}).get("result", {}).get("results", [])
+        print(f"\nНайдено наборов: {len(packages)}")
+        for package in packages:
+            print(f"  · {package.get('name')} — {package.get('title')}")
 
-        for resource in resources[:2]:
-            try:
-                payload = http.get_json(
-                    DATASTORE_SEARCH_URL,
-                    params={"resource_id": resource["id"], "limit": 3},
-                )
-            except HttpError as exc:
-                print(f"  ✗ ресурс {resource['id']}: {exc}")
+        for package in packages:
+            resources = [
+                r for r in (package.get("resources") or [])
+                if r.get("datastore_active") and r.get("id")
+            ]
+            if not resources:
                 continue
 
-            result = (payload or {}).get("result", {})
-            fields = [f.get("id") for f in (result.get("fields") or [])]
-            records = result.get("records") or []
-            print(f"\n  Ресурс {resource['id']} — записей в наборе: {result.get('total', '?')}")
-            print(f"  Колонки: {fields}")
-            if records:
-                print("  Первая запись:")
-                print(_fmt(records[0], 1500))
+            print("\n" + "-" * 72)
+            print(f"Набор: {package.get('title') or package.get('name')}")
+            print(f"  id: {package.get('name')}")
+            print(f"  описание: {(package.get('notes') or '')[:200]}")
 
-        shown += 1
-        if shown >= limit:
-            break
+            for resource in resources[:2]:
+                try:
+                    payload = http.get_json(
+                        DATASTORE_SEARCH_URL,
+                        params={"resource_id": resource["id"], "limit": 3},
+                    )
+                except HttpError as exc:
+                    print(f"  ✗ ресурс {resource['id']}: {exc}")
+                    continue
+
+                result = (payload or {}).get("result", {})
+                fields = [f.get("id") for f in (result.get("fields") or [])]
+                records = result.get("records") or []
+                print(f"\n  Ресурс {resource['id']} — записей: {result.get('total', '?')}")
+                print(f"  Колонки: {fields}")
+                if records:
+                    print("  Первая запись:")
+                    print(_fmt(records[0], 1500))
+
+            shown += 1
+            if shown >= limit:
+                break
 
     if shown == 0:
         print("\n✗ Ни одного набора с загруженными в datastore данными не нашлось.")

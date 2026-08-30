@@ -150,7 +150,14 @@ def build_parser() -> argparse.ArgumentParser:
     inspect_cmd.add_argument("tender_ids", nargs="*", help="номера тендеров; по умолчанию первые из поиска")
     inspect_cmd.add_argument("--limit", type=int, default=3, help="сколько тендеров смотреть")
     inspect_cmd.add_argument("--all", action="store_true", help="искать среди всех, а не только активных")
-    inspect_cmd.add_argument("--ckan", help="вместо портала рм\"י разведать наборы data.gov.il по запросу")
+    inspect_cmd.add_argument(
+        "--ckan",
+        help="разведать наборы data.gov.il; запросов можно несколько через запятую",
+    )
+    inspect_cmd.add_argument(
+        "--ckan-catalogue", action="store_true",
+        help="напечатать весь каталог наборов data.gov.il — без догадок о терминах",
+    )
     inspect_cmd.add_argument(
         "--service",
         choices=("iplan", "govmap", "nadlan", "macro"),
@@ -276,6 +283,10 @@ def cmd_inspect(args: argparse.Namespace) -> int:
             return inspect_macro(http)
         return inspect_nadlan(http, settlement_code=args.settlement_code)
 
+    if args.ckan_catalogue:
+        from .inspect import ckan_catalogue
+
+        return ckan_catalogue(http)
     if args.ckan:
         from .inspect import inspect_ckan
 
