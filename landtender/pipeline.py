@@ -479,7 +479,22 @@ def enrich_stored_lots(
             if (lot.area_sqm or 0) < MIN_CREDIBLE_AREA_SQM and lot.gush and lot.chelka
         ]
 
-    counts = {"кандидатов": len(lots), "просмотрено": 0, "площадь добыта": 0, "не найдено": 0}
+    # Кадастр ищет участок по гуш/хелка. Лот без них govmap найти не может,
+    # и его площадь заглушкой и останется: из 1497 лотов с площадью-заглушкой
+    # кадастровые номера есть у 181. Разница видна в счётчиках, чтобы её не
+    # приходилось выводить из пустого результата.
+    without_cadastre = sum(
+        1 for lot in stored_lots(storage)
+        if (lot.area_sqm or 0) < MIN_CREDIBLE_AREA_SQM and not (lot.gush and lot.chelka)
+    ) if only_missing_area else 0
+
+    counts = {
+        "кандидатов": len(lots),
+        "без гуш/хелка": without_cadastre,
+        "просмотрено": 0,
+        "площадь добыта": 0,
+        "не найдено": 0,
+    }
     deadline = time.monotonic() + minutes * 60 if minutes > 0 else None
     now = utcnow_iso()
 
