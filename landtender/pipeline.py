@@ -535,9 +535,32 @@ def top_lots(
         and lot.score_price is not None
         and lot.price_nis
         and lot.price_nis > 0
+        # Цена сделки — это то, что победитель уже заплатил. Такой лот не
+        # предложение, а история: предлагать его к покупке нечестно.
+        and lot.price_kind != "final"
     ]
     ranked.sort(key=lambda lot: (-(lot.score_total or 0), -(lot.price_usd or 0)))
-    return ranked[:limit]
+    return _one_per_tender(ranked)[:limit]
+
+
+def _one_per_tender(lots: list[Lot]) -> list[Lot]:
+    """Оставляет лучший участок каждого тендера.
+
+    В первом рабочем рейтинге восемь мест из десяти занял тендер 386/2018:
+    его участки почти одинаковы — 379-403 м², по одной единице, оценка около
+    двух миллионов у каждого. Десять строк про одно предложение — это не
+    десять предложений, а одно, показанное десять раз. Порядок уже по баллу,
+    поэтому первым встреченным и оказывается лучший участок тендера.
+    """
+    seen: set[tuple[str, str]] = set()
+    out: list[Lot] = []
+    for lot in lots:
+        key = (lot.source, lot.tender_id or lot.source_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(lot)
+    return out
 
 
 def explain_top(

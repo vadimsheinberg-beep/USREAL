@@ -624,3 +624,70 @@ class TestPriceIndicatorIsMandatory:
         top = pipeline.top_lots(self.config(), object(), storage)
         assert [item.source_id for item in top] == ["с оценкой"]
         assert top[0].score_price is not None
+
+
+class TestOnePerTender:
+    """Десять строк про одно предложение — это не десять предложений.
+
+    В первом рабочем рейтинге восемь мест из десяти занял тендер 386/2018:
+    его участки почти одинаковы — 379-403 м², по одной единице, оценка около
+    двух миллионов у каждого.
+    """
+
+    def config(self):
+        config = make_config()
+        config.data.setdefault("valuation", {})["estimate"] = True
+        return config
+
+    def fill(self, storage, lots):
+        for item in lots:
+            storage.upsert_lot(item, "2026-08-30T00:00:00+00:00")
+
+    def test_only_the_best_plot_of_a_tender_places(self, storage, monkeypatch):
+        self.fill(storage, [
+            lot(source_id=f"участок-{i}", tender_id="20180386", settlement="חיפה",
+                area_sqm=400.0, units=1, price_nis=200_000.0 + i * 1000,
+                closing_date="2027-01-01")
+            for i in range(8)
+        ])
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: comparables_for())
+        top = pipeline.top_lots(self.config(), object(), storage)
+        assert len(top) == 1
+
+    def test_different_tenders_all_place(self, storage, monkeypatch):
+        self.fill(storage, [
+            lot(source_id=f"л-{i}", tender_id=f"2018038{i}", settlement="חיפה",
+                area_sqm=400.0, units=1, price_nis=200_000.0, closing_date="2027-01-01")
+            for i in range(4)
+        ])
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: comparables_for())
+        assert len(pipeline.top_lots(self.config(), object(), storage)) == 4
+
+
+class TestClosedDealsAreNotOffers:
+    """Цена сделки — то, что победитель уже заплатил, а не предложение."""
+
+    def config(self):
+        config = make_config()
+        config.data.setdefault("valuation", {})["estimate"] = True
+        return config
+
+    def test_a_final_price_keeps_the_lot_out(self, storage, monkeypatch):
+        storage.upsert_lot(
+            lot(source_id="продано", tender_id="1", settlement="חיפה", area_sqm=400.0,
+                units=1, price_nis=500_000.0, price_kind="final",
+                closing_date="2027-01-01"),
+            "2026-08-30T00:00:00+00:00",
+        )
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: comparables_for())
+        assert pipeline.top_lots(self.config(), object(), storage) == []
+
+    def test_a_minimum_price_is_an_offer(self, storage, monkeypatch):
+        storage.upsert_lot(
+            lot(source_id="торгуется", tender_id="1", settlement="חיפה", area_sqm=400.0,
+                units=1, price_nis=500_000.0, price_kind="min",
+                closing_date="2027-01-01"),
+            "2026-08-30T00:00:00+00:00",
+        )
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: comparables_for())
+        assert len(pipeline.top_lots(self.config(), object(), storage)) == 1
