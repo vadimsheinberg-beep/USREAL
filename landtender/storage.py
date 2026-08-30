@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS lots (
     fx_date                TEXT,
     price_per_unit_usd     REAL,
     price_per_sqm_usd      REAL,
+    price_per_sqm_nis      REAL,
     tier                   TEXT,
     published_date         TEXT,
     opening_date           TEXT,
@@ -132,7 +133,7 @@ _LOT_COLUMNS = (
     "max_bid_nis", "bid_headroom_pct", "roi_at_min",
     "units", "units_basis",
     "price_nis", "price_kind", "development_costs_nis", "guarantee_nis", "price_usd",
-    "fx_rate", "fx_date", "price_per_unit_usd", "price_per_sqm_usd", "tier",
+    "fx_rate", "fx_date", "price_per_unit_usd", "price_per_sqm_usd", "price_per_sqm_nis", "tier",
     "published_date", "opening_date", "closing_date", "committee_date",
     "content_hash", "first_seen", "last_seen",
 )

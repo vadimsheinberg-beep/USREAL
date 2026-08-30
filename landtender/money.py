@@ -184,6 +184,12 @@ def enrich_lot(
         lot.price_per_unit_usd = round(lot.price_usd / lot.units, 2)
     if lot.price_usd is not None and lot.area_sqm:
         lot.price_per_sqm_usd = round(lot.price_usd / lot.area_sqm, 2)
+    elif lot.price_per_sqm_nis:
+        # Источник сообщил цену метра, а не всего объекта: доллары считаем от
+        # неё. Выводить полную цену, домножив на выдуманную площадь, нельзя.
+        per_sqm = fx.to_usd(lot.price_per_sqm_nis)
+        if per_sqm is not None:
+            lot.price_per_sqm_usd = round(per_sqm, 2)
     if lot.price_usd is not None:
         lot.price_usd = round(lot.price_usd, 2)
 

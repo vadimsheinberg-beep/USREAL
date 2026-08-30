@@ -117,6 +117,11 @@ class Lot:
     fx_date: str | None = None
     price_per_unit_usd: float | None = None
     price_per_sqm_usd: float | None = None
+    #: Цена за квадратный метр в шекелях, когда источник сообщает именно её.
+    #: Программа «דירה בהנחה» публикует цену метра по проекту, а площади
+    #: конкретной квартиры не даёт: вывести из этого полную цену нельзя, не
+    #: выдумав площадь. Поэтому цена метра хранится как есть.
+    price_per_sqm_nis: float | None = None
     tier: str = TIER_UNKNOWN
 
     # Даты (ISO-строки, чтобы одинаково жить в SQLite и в JSON)
