@@ -236,6 +236,45 @@ def age_histogram(rows: list[Lot], today: date | None = None) -> dict[int, int]:
     return dict(sorted(counts.items(), reverse=True))
 
 
+def explain_estimates(
+    lots: list[Lot], comparables: list[Comparable]
+) -> dict[str, int]:
+    """Почему лот остался без оценки — по одной причине на лот.
+
+    Оценка отвечает за главный показатель рейтинга: цену против рынка. Когда
+    её нет ни у кого, топ вырождается в сортировку по сроку подачи. Причин
+    ровно четыре, и гадать между ними бессмысленно — счётчики отвечают точно.
+    """
+    counts = {
+        "всего": 0,
+        "площадь-заглушка": 0,
+        "город не указан": 0,
+        "мало сделок по городу": 0,
+        "интервал шире порога": 0,
+        "оценено": 0,
+    }
+
+    for lot in lots:
+        counts["всего"] += 1
+        if not lot.area_sqm or lot.area_sqm < MIN_CREDIBLE_AREA_SQM:
+            counts["площадь-заглушка"] += 1
+            continue
+        if not lot.settlement:
+            counts["город не указан"] += 1
+            continue
+        pool = nearby(comparables, lot)
+        if len(pool) < MIN_COMPARABLES:
+            counts["мало сделок по городу"] += 1
+            continue
+        value = estimate(lot, comparables)
+        if value is None or _too_wide(value):
+            counts["интервал шире порога"] += 1
+            continue
+        counts["оценено"] += 1
+
+    return counts
+
+
 def nearby(comparables: list[Comparable], lot: Lot) -> list[Comparable]:
     """Сделки, сравнимые с этим лотом: тот же населённый пункт, и только он.
 

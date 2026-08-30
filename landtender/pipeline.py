@@ -493,6 +493,24 @@ def top_lots(
     return ranked[:limit]
 
 
+def explain_top(
+    config: Config, http: HttpClient, storage: Storage, only_active: bool = True
+) -> dict[str, int]:
+    """Счётчики причин, по которым лоты остались без оценки.
+
+    Оценка отвечает за главный показатель рейтинга — цену против рынка. Когда
+    её нет ни у кого, топ вырождается в сортировку по сроку подачи, и важно
+    знать, что именно её не пускает.
+    """
+    from .valuation import explain_estimates
+
+    today = date.today().isoformat()
+    lots = collapse_placeholders(stored_lots(storage))
+    if only_active:
+        lots = [lot for lot in lots if not is_expired(lot, today)]
+    return explain_estimates(lots, build_appraiser(config, http, storage) or [])
+
+
 def collapse_placeholders(lots: Sequence[Lot]) -> list[Lot]:
     """Убирает тендер-заглушку, если по тому же тендеру есть разобранные участки.
 

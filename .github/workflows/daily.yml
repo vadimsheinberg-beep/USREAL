@@ -116,7 +116,7 @@ jobs:
         run: |
           flags=""
           [ "$SEND_TOP" = "true" ] && [ "$DRY_RUN" != "true" ] && flags="--send"
-          landtender top --limit 10 $flags --out "data/top-$(date +%F).csv"
+          landtender top --limit 10 --why $flags --out "data/top-$(date +%F).csv"
 
       - name: Сельхозземля — срез всей базы
         env:

@@ -109,6 +109,10 @@ def build_parser() -> argparse.ArgumentParser:
     top_cmd.add_argument("--send", action="store_true", help="отправить в Telegram")
     top_cmd.add_argument("--all", action="store_true", help="включая закрытые тендеры")
     top_cmd.add_argument("--out", help="выгрузить список в CSV")
+    top_cmd.add_argument(
+        "--why", action="store_true",
+        help="показать, почему лоты остались без оценки (счётчики причин)",
+    )
 
     sub.add_parser("stats", help="показать состояние базы и последний запуск")
 
@@ -420,7 +424,7 @@ def cmd_top(args: argparse.Namespace) -> int:
     и рейтинг по ним сравнивал бы лоты по разным меркам.
     """
     from .notify import TelegramError, TelegramNotifier
-    from .pipeline import build_http, top_lots
+    from .pipeline import build_http, explain_top, top_lots
 
     config = load_config(args.config)
     # Рейтинг строится на оценке, поэтому она нужна независимо от конфига:
@@ -433,8 +437,15 @@ def cmd_top(args: argparse.Namespace) -> int:
     with open_storage(config, args.db) as storage:
         backfill_land_use(storage)
         lots = top_lots(config, http, storage, limit=args.limit, only_active=not args.all)
+        breakdown = explain_top(config, http, storage) if args.why else {}
 
     blocks = build_top_digest(lots, limit=args.limit, only_active=not args.all)
+
+    if args.why:
+        print("Почему лоты остались без оценки:")
+        for reason, count in breakdown.items():
+            print(f"  {reason:<26} {count}")
+        print()
 
     if args.out:
         export_csv(lots, Path(args.out))

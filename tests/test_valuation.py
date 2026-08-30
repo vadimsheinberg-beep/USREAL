@@ -17,6 +17,7 @@ from landtender.valuation import (
     Comparable,
     age_histogram,
     collect_comparables,
+    explain_estimates,
     estimate,
     explain_rejections,
     nearby,
@@ -332,3 +333,36 @@ class TestSpreadGate:
 
 def _too_wide(value):
     return value.spread_ratio is not None and value.spread_ratio > MAX_SPREAD_RATIO
+
+
+class TestExplainEstimates:
+    """Почему оценки нет: счётчики вместо догадок.
+
+    После ужесточения правил оценку не получил ни один лот, и топ выродился
+    в сортировку по сроку подачи. Гипотез было три — нет города, мало сделок
+    по городу, слишком широкий интервал, — и разбор отвечает, какая верна.
+    """
+
+    def test_placeholder_area_is_named(self):
+        counts = explain_estimates([deal("цель", area=1.0)], pool(30))
+        assert counts["площадь-заглушка"] == 1
+
+    def test_missing_city_is_named(self):
+        counts = explain_estimates([deal("цель", area=1000.0, city=None)], pool(30))
+        assert counts["город не указан"] == 1
+
+    def test_thin_city_is_named(self):
+        """Сделки есть, но не в этом городе."""
+        counts = explain_estimates(
+            [deal("цель", area=1000.0, city="דימונה")], pool(30, city="חיפה")
+        )
+        assert counts["мало сделок по городу"] == 1
+
+    def test_a_valued_lot_is_counted_as_such(self):
+        counts = explain_estimates([deal("цель", area=1000.0)], pool(30))
+        assert counts["оценено"] == 1
+
+    def test_each_lot_is_counted_once(self):
+        lots = [deal(str(i), area=1000.0) for i in range(4)]
+        counts = explain_estimates(lots, pool(30))
+        assert sum(v for k, v in counts.items() if k != "всего") == counts["всего"]
