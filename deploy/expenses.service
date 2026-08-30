@@ -1,0 +1,30 @@
+[Unit]
+Description=Месячный отчёт по личным расходам
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/usreal
+# Токены держите в файле с правами 600, а не в юните
+EnvironmentFile=/etc/expenses.env
+ExecStart=/opt/usreal/.venv/bin/expenses --config /opt/usreal/expenses.toml monthly
+TimeoutStartSec=1800
+
+# Данные о расходах читает только владелец
+User=expenses
+Group=expenses
+UMask=0077
+
+# Программе достаточно писать только в свой каталог данных
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/opt/usreal/data
+
+[Install]
+WantedBy=multi-user.target
