@@ -56,6 +56,19 @@ MAX_AGE_YEARS = 20
 #: Насколько модель должна объяснять разброс, чтобы её показывать.
 MIN_R_SQUARED = 0.2
 
+#: Во сколько раз верхняя граница может превышать нижнюю. Первый прогон топа
+#: на настоящей базе выдал «оценка 175 млн ₪ (23 млн — 1.3 млрд)»: интервал в
+#: пятьдесят раз — это не оценка, а сообщение «где-то между сараем и заводом».
+#: Хуже того, относительно такого числа любая цена оказывается «на 88% ниже
+#: оценки», и весь рейтинг заполняется мнимыми находками. Оценка шире этого
+#: порога не показывается вовсе.
+MAX_SPREAD_RATIO = 4.0
+
+#: Площадь меньше этой портал сообщает вместо настоящей: у поля в 14 гектаров
+#: он отдаёт «1 м²». Такой участок нельзя ни оценить, ни взять в сравнимые —
+#: цена за метр получается фантастической в обе стороны.
+MIN_CREDIBLE_AREA_SQM = 10.0
+
 
 @dataclass(frozen=True)
 class Comparable:
@@ -126,7 +139,7 @@ def collect_comparables(
     for lot in rows:
         if lot.price_kind != "final" or not lot.price_nis or not lot.area_sqm:
             continue
-        if lot.area_sqm <= 0 or lot.price_nis <= 0:
+        if lot.area_sqm < MIN_CREDIBLE_AREA_SQM or lot.price_nis <= 0:
             continue
         when = lot.closing_date or lot.published_date
         age = _age_years(when, today)
@@ -174,7 +187,7 @@ def explain_rejections(
         "всего": 0,
         "нет цены сделки": 0,
         "нет площади": 0,
-        "цена или площадь нулевые": 0,
+        "площадь-заглушка или нулевая цена": 0,
         "нет даты": 0,
         f"старше {max_age_years} лет": 0,
         "годных": 0,
@@ -188,8 +201,8 @@ def explain_rejections(
         if not lot.area_sqm:
             counts["нет площади"] += 1
             continue
-        if lot.area_sqm <= 0 or lot.price_nis <= 0:
-            counts["цена или площадь нулевые"] += 1
+        if lot.area_sqm < MIN_CREDIBLE_AREA_SQM or lot.price_nis <= 0:
+            counts["площадь-заглушка или нулевая цена"] += 1
             continue
         age = _age_years(lot.closing_date or lot.published_date, today)
         if age is None:
@@ -224,25 +237,25 @@ def age_histogram(rows: list[Lot], today: date | None = None) -> dict[int, int]:
 
 
 def nearby(comparables: list[Comparable], lot: Lot) -> list[Comparable]:
-    """Сделки, сравнимые с этим лотом.
+    """Сделки, сравнимые с этим лотом: тот же населённый пункт, и только он.
 
-    Близость определяется населённым пунктом: расстояние в метрах здесь
-    обманчиво, потому что цена земли меняется на границе муниципалитета
-    скачком, а не плавно. Если сделок по городу мало, берём тот же вид
-    назначения по всей выборке — лучше широкая база, чем оценка по трём
-    точкам.
+    Раньше при нехватке сделок по городу выборка расширялась до всех сделок
+    того же назначения по стране. На настоящей базе это и оказалось главным
+    источником бессмыслицы: участок сравнивался с участком в другом конце
+    страны, модель объясняла разброс на треть, а интервал оценки выходил в
+    полсотни раз. Цена земли меняется на границе муниципалитета скачком, и
+    «широкая выборка» здесь не компромисс, а подмена предмета.
+
+    Лучше отказаться от оценки, чем выдать оценку по чужому городу.
     """
+    if not lot.settlement:
+        return []
     # Сделка не может быть сравнимой сама себе. Закрытый тендер попадает и в
     # выборку, и на оценку: без этого он объяснял бы собственную цену.
-    pool = [c for c in comparables if c.source_id != lot.source_id]
-
-    if lot.settlement:
-        same_city = [c for c in pool if c.settlement == lot.settlement]
-        if len(same_city) >= MIN_COMPARABLES:
-            return same_city
-
-    same_use = [c for c in pool if c.land_use == lot.land_use]
-    return same_use if len(same_use) >= MIN_COMPARABLES else pool
+    return [
+        c for c in comparables
+        if c.settlement == lot.settlement and c.source_id != lot.source_id
+    ]
 
 
 def estimate(lot: Lot, comparables: list[Comparable]) -> Valuation | None:
@@ -251,7 +264,7 @@ def estimate(lot: Lot, comparables: list[Comparable]) -> Valuation | None:
     Отказ вернуть число — тоже результат: пустая оценка честнее уверенной
     цифры, построенной на четырёх старых сделках.
     """
-    if not lot.area_sqm or lot.area_sqm <= 0:
+    if not lot.area_sqm or lot.area_sqm < MIN_CREDIBLE_AREA_SQM:
         return None
 
     pool = nearby(comparables, lot)
@@ -272,9 +285,19 @@ def estimate(lot: Lot, comparables: list[Comparable]) -> Valuation | None:
     )
 
     if model is not None and model.usable and model.r_squared >= MIN_R_SQUARED:
-        return _from_regression(lot, model, len(pool), keep)
+        value = _from_regression(lot, model, len(pool), keep)
+        # Слишком широкий интервал — не осторожная оценка, а её отсутствие:
+        # относительно такого числа любая цена выглядит выгодной.
+        if value is not None and _too_wide(value):
+            return _median_valuation(lot, pool)
+        return value
 
     return _median_valuation(lot, pool)
+
+
+def _too_wide(value: Valuation) -> bool:
+    ratio = value.spread_ratio
+    return ratio is not None and ratio > MAX_SPREAD_RATIO
 
 
 def _median_valuation(lot: Lot, pool: list[Comparable]) -> Valuation | None:

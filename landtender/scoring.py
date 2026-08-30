@@ -28,6 +28,7 @@ from datetime import date
 
 from .invest import SIGNAL_CONFIRMED, SIGNAL_EARLY, SIGNAL_LIKELY, SIGNAL_NONE
 from .models import Lot
+from .valuation import MIN_CREDIBLE_AREA_SQM
 
 #: Веса показателей в общем балле. Цена весит больше всех, потому что она
 #: единственная измеряется в деньгах; срок — меньше всех, потому что он
@@ -139,7 +140,14 @@ def _price_score(lot: Lot) -> float | None:
 
 
 def _density_score(lot: Lot) -> float | None:
-    if not lot.units or not lot.area_sqm or lot.area_sqm <= 0:
+    """Плотность считается только по правдоподобной площади.
+
+    Портал вместо настоящей площади иногда отдаёт «1 м²». Тендер 405/2021 с
+    166 квартирами на этом квадратном метре давал плотность в двадцать тысяч
+    на дунам, полный балл и первое место в рейтинге. Делить на заглушку —
+    значит считать брак портала достоинством участка.
+    """
+    if not lot.units or not lot.area_sqm or lot.area_sqm < MIN_CREDIBLE_AREA_SQM:
         return None
     per_dunam = lot.units / (lot.area_sqm / 1000)
     return _clamp(100.0 * per_dunam / FULL_DENSITY)

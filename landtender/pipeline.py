@@ -465,7 +465,8 @@ def top_lots(
     получается по одной мерке для всех.
 
     Лоты без общего балла в топ не идут: место в рейтинге без основания —
-    это не «десятое место», это отсутствие ответа.
+    это не «десятое место», это отсутствие ответа. Без цены — тоже: рейтинг
+    предложений отвечает на вопрос «что брать и почём».
     """
     today = date.today().isoformat()
     lots = collapse_placeholders(stored_lots(storage))
@@ -480,7 +481,14 @@ def top_lots(
             _apply_estimate(lot, comparables)
         _apply_scoring(lot, bidding_options)
 
-    ranked = [lot for lot in lots if lot.score_total is not None]
+    # Рейтинг предложений без цены бессмыслен: у такого лота нет ни скидки к
+    # оценке, ни доходности, ни предельной ставки — сравнивать нечего. В
+    # первом прогоне два верхних места заняли тендеры, у которых приём заявок
+    # ещё не открыт и цена появится только через месяц.
+    ranked = [
+        lot for lot in lots
+        if lot.score_total is not None and lot.price_nis and lot.price_nis > 0
+    ]
     ranked.sort(key=lambda lot: (-(lot.score_total or 0), -(lot.price_usd or 0)))
     return ranked[:limit]
 

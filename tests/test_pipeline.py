@@ -513,6 +513,24 @@ class TestTopLots:
         top = pipeline.top_lots(self.config(), object(), storage, limit=10)
         assert all(item.score_total != 99.0 for item in top)
 
+    def test_lots_without_a_price_are_left_out(self, storage, monkeypatch):
+        """Рейтинг предложений отвечает на «что брать и почём».
+
+        В первом прогоне на настоящей базе два верхних места заняли тендеры,
+        у которых приём заявок ещё не открыт: портал держит минимальную цену
+        пустой до открытия. Балл они набрали на плотности и сроке, а купить
+        по ним нечего.
+        """
+        self.store(storage, [
+            lot(source_id="без цены", price_nis=None, area_sqm=1000.0, units=40,
+                closing_date="2027-01-01"),
+            lot(source_id="с ценой", price_nis=5_000_000.0, area_sqm=1000.0, units=40,
+                closing_date="2027-01-01"),
+        ])
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: [])
+        ids = {item.source_id for item in pipeline.top_lots(self.config(), object(), storage)}
+        assert ids == {"с ценой"}
+
     def test_lots_without_a_score_are_left_out(self, storage, monkeypatch):
         """Место в рейтинге без основания — это не место, а отсутствие ответа."""
         self.store(storage, [lot(source_id="без данных", price_nis=None, units=None)])

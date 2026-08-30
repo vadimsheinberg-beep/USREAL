@@ -131,3 +131,22 @@ class TestTotal:
         )
         assert card.coverage == 5
         assert 0 < card.total <= 100
+
+
+class TestDensityOnPlaceholderArea:
+    """166 квартир на одном квадратном метре — брак портала, а не плотность.
+
+    Тендер 405/2021 пришёл с площадью «1 м²» и 166 единицами. Деление давало
+    двадцать тысяч квартир на дунам, полный балл за плотность и первое место
+    в рейтинге — при том, что цены у лота вообще не было.
+    """
+
+    def test_placeholder_area_yields_no_density_score(self):
+        from landtender.scoring import score
+        card = score(Lot(source="rmi_michrazim", source_id="1", area_sqm=1.0, units=166))
+        assert card.density is None
+
+    def test_a_real_area_still_scores(self):
+        from landtender.scoring import score
+        card = score(Lot(source="rmi_michrazim", source_id="1", area_sqm=1000.0, units=8))
+        assert card.density == 100.0

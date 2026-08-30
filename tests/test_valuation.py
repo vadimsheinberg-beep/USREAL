@@ -11,6 +11,8 @@ from landtender.models import Lot
 from landtender.regression import fit, median
 from landtender.valuation import (
     MAX_AGE_YEARS,
+    MAX_SPREAD_RATIO,
+    MIN_CREDIBLE_AREA_SQM,
     MIN_COMPARABLES,
     Comparable,
     age_histogram,
@@ -139,11 +141,23 @@ class TestNearby:
         target = deal(city="נתניה")
         assert all(c.settlement == "נתניה" for c in nearby(comps, target))
 
-    def test_falls_back_to_the_same_land_use(self):
-        """Лучше широкая база, чем оценка по трём точкам."""
+    def test_other_cities_never_leak_in(self):
+        """Мало сделок по городу — не повод сравнивать с другим городом.
+
+        Прежде выборка расширялась до всех сделок того же назначения по
+        стране. На настоящей базе это и дало бессмыслицу: участок сравнивался
+        с участком в другом конце страны, модель объясняла разброс на треть,
+        интервал оценки выходил в полсотни раз, и относительно такого числа
+        любая цена выглядела выгодной. Отказ от оценки честнее.
+        """
         comps = pool(3, city="עכו") + pool(12, city="חיפה")
-        chosen = nearby(comps, deal(city="עכו"))
-        assert len(chosen) >= MIN_COMPARABLES
+        chosen = nearby(comps, deal("не из выборки", city="עכו"))
+        assert len(chosen) == 3
+        assert all(c.settlement == "עכו" for c in chosen)
+
+    def test_a_lot_without_a_city_gets_nothing(self):
+        """Без города сравнивать не с чем — вся страна сравнимой не является."""
+        assert nearby(pool(20), deal(city=None)) == []
 
 
 class TestEstimate:
@@ -257,3 +271,64 @@ class TestAgeHistogram:
     def test_ignores_rows_without_a_deal_price(self):
         rows = [deal("1", price_kind="min"), deal("2", area=None), deal("3")]
         assert age_histogram(rows) == {2025: 1}
+
+
+class TestPlaceholderArea:
+    """Портал вместо площади иногда отдаёт «1 м²» — это не участок.
+
+    У поля в 14 гектаров (тендер 21/2020) площадь пришла как 1 м². Цена за
+    метр по такой записи получается фантастической, и в обе стороны: как
+    сравнимая сделка она отравляет выборку, как объект оценки — получает
+    оценку в сотни миллионов.
+    """
+
+    def test_such_a_deal_is_not_comparable(self):
+        assert collect_comparables([deal(area=1.0)]) == []
+
+    def test_the_boundary_is_the_threshold(self):
+        assert collect_comparables([deal(area=MIN_CREDIBLE_AREA_SQM)]) != []
+        assert collect_comparables([deal(area=MIN_CREDIBLE_AREA_SQM - 0.1)]) == []
+
+    def test_such_a_lot_is_not_valued(self):
+        assert estimate(deal("цель", area=1.0), pool(30)) is None
+
+    def test_the_rejection_is_counted_separately(self):
+        counts = explain_rejections([deal(area=1.0)])
+        assert counts["площадь-заглушка или нулевая цена"] == 1
+        assert counts["годных"] == 0
+
+
+class TestSpreadGate:
+    """Интервал в полсотни раз — это не осторожная оценка, а её отсутствие.
+
+    Первый прогон топа выдал «оценка 175 млн ₪ (23 млн — 1.3 млрд)». Хуже
+    самого числа то, что относительно него любая цена оказывается «на 88%
+    ниже оценки», и рейтинг заполняется мнимыми находками.
+    """
+
+    def noisy(self, n=40):
+        """Выборка без всякой зависимости цены от площади: разброс огромен."""
+        rows = []
+        for i in range(n):
+            area = 400.0 + i * 300
+            # Цена за метр скачет на два порядка и площадью не объясняется.
+            per_sqm = 100.0 * (1000 ** ((i % 7) / 6.0))
+            rows.append(deal(str(i), area=area, price=per_sqm * area))
+        return collect_comparables(rows)
+
+    def test_a_wide_regression_is_not_shown_as_one(self):
+        value = estimate(deal("цель", area=5000.0), self.noisy())
+        assert value is None or value.method == "median" or not _too_wide(value)
+
+    def test_a_tight_regression_survives(self):
+        value = estimate(deal("цель", area=1000.0), pool(30))
+        assert value.method == "regression"
+        assert value.spread_ratio <= MAX_SPREAD_RATIO
+
+    def test_the_ratio_itself_is_reported(self):
+        value = estimate(deal("цель", area=1000.0), pool(30))
+        assert value.spread_ratio == pytest.approx(value.high_nis / value.low_nis)
+
+
+def _too_wide(value):
+    return value.spread_ratio is not None and value.spread_ratio > MAX_SPREAD_RATIO
