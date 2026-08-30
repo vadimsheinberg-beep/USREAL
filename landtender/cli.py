@@ -403,7 +403,9 @@ def cmd_harvest(args: argparse.Namespace) -> int:
         print(f"  {reason:<28} {count}")
     if years:
         print("\nСостоявшиеся сделки по годам:")
-        for year, count in list(years.items())[:25]:
+        # Без обрезки: смысл гистограммы в том, чтобы видеть весь ряд целиком,
+        # а лет в архиве больше, чем помещалось в прежний лимит.
+        for year, count in years.items():
             print(f"  {year}  {'#' * min(count // 10 + 1, 40)} {count}")
     if not deals:
         print("\nЦен сделок пока нет — повторите команду, лимит деталей расходуется постепенно.")
