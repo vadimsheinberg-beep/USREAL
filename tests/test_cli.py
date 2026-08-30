@@ -254,6 +254,75 @@ class TestFarmlandCommand:
         assert "מכרז מגורים" not in text
 
 
+class ScorableSource(Source):
+    """Лоты, которым есть чем набрать балл: площадь, единицы и срок подачи."""
+
+    name = "fake"
+    title = "тестовый источник"
+
+    def fetch(self):
+        return [
+            Lot(source="fake", source_id="1", tender_name="плотный",
+                area_sqm=1_000.0, units=40, price_nis=9_000_000.0,
+                closing_date="2099-01-01"),
+            Lot(source="fake", source_id="2", tender_name="редкий",
+                area_sqm=10_000.0, units=4, price_nis=3_000_000.0,
+                closing_date="2099-01-01"),
+        ]
+
+
+class TestTopCommand:
+    """Сама команда, а не только её начинка.
+
+    Первый прогон топа упал на NameError: в модуле не было импорта, которым
+    команда пользовалась. Ни один тест этого не поймал — проверялись подбор
+    лотов и вёрстка по отдельности, но не команда целиком.
+    """
+
+    @pytest.fixture(autouse=True)
+    def scorable(self, monkeypatch):
+        # Сравнимые сделки берутся из базы, но за индексом ЦСБ ходят в сеть.
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: [])
+        monkeypatch.setattr(pipeline, "SOURCES_BY_NAME", {"fake": ScorableSource})
+        monkeypatch.setattr(cli, "SOURCES_BY_NAME", {"fake": ScorableSource})
+
+    def fill(self, config_file):
+        cli.main(["--config", str(config_file), "run", "--sources", "fake", "--no-notify"])
+
+    def test_runs_and_prints_the_ranking(self, config_file, capsys):
+        self.fill(config_file)
+        capsys.readouterr()
+        assert cli.main(["--config", str(config_file), "top"]) == 0
+        out = capsys.readouterr().out
+        assert "Лучшие предложения — топ-2" in out
+        # Первое место занято, и занято плотным участком: при прочих равных
+        # сорок квартир на дунам стоят больше четырёх.
+        assert "<b>1.</b>" in out
+        assert out.index("плотный") < out.index("редкий")
+
+    def test_empty_database_explains_itself(self, config_file, capsys):
+        assert cli.main(["--config", str(config_file), "top"]) == 0
+        assert "harvest" in capsys.readouterr().out
+
+    def test_limit_is_passed_through(self, config_file, capsys):
+        self.fill(config_file)
+        capsys.readouterr()
+        cli.main(["--config", str(config_file), "top", "--limit", "1"])
+        assert "топ-1" in capsys.readouterr().out
+
+    def test_csv_export(self, config_file, tmp_path, capsys):
+        self.fill(config_file)
+        out = tmp_path / "top.csv"
+        cli.main(["--config", str(config_file), "top", "--out", str(out)])
+        assert out.exists()
+
+    def test_send_without_a_token_says_so(self, config_file, capsys):
+        self.fill(config_file)
+        capsys.readouterr()
+        assert cli.main(["--config", str(config_file), "top", "--send"]) == 2
+        assert "Нет токена" in capsys.readouterr().out
+
+
 def test_stats_command_reports_empty_database(config_file, capsys):
     assert cli.main(["--config", str(config_file), "stats"]) == 0
     assert "Запусков ещё не было" in capsys.readouterr().out

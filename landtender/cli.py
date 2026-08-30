@@ -420,18 +420,16 @@ def cmd_top(args: argparse.Namespace) -> int:
     и рейтинг по ним сравнивал бы лоты по разным меркам.
     """
     from .notify import TelegramError, TelegramNotifier
-    from .pipeline import top_lots
+    from .pipeline import build_http, top_lots
 
     config = load_config(args.config)
     # Рейтинг строится на оценке, поэтому она нужна независимо от конфига:
     # без неё у показателя «цена против оценки» нет числа, и топ вырождается.
     config.data.setdefault("valuation", {})["estimate"] = True
 
-    http = HttpClient(
-        user_agent=str(config.get("general", "user_agent", "landtender/0.1")),
-        timeout=int(config.get("general", "request_timeout", 45)),
-        rate_limit_delay=float(config.get("general", "rate_limit_delay", 1.0)),
-    )
+    # Сеть нужна только за индексом ЦСБ, которым старые сделки приводятся к
+    # сегодняшним деньгам; сами лоты берутся из базы.
+    http = build_http(config)
     with open_storage(config, args.db) as storage:
         backfill_land_use(storage)
         lots = top_lots(config, http, storage, limit=args.limit, only_active=not args.all)
