@@ -2,7 +2,7 @@
 
 import pytest
 
-from landtender.config import Config, load_config, resolve_secret
+from landtender.config import DEFAULTS, Config, _deep_merge, load_config, resolve_secret
 
 SAMPLE = """
 [general]
@@ -80,3 +80,36 @@ class TestSecrets:
         monkeypatch.setenv("TEST_TG_TOKEN", "abc:def")
         config = load_config(write_config(tmp_path))
         assert config.get("telegram", "bot_token") == "abc:def"
+
+
+class TestDefaultsAreNotShared:
+    """Конфиг не должен быть окном в общие умолчания.
+
+    ``dict(base)`` копирует только верхний уровень, поэтому секции, которых
+    нет в файле, оказывались теми же объектами, что в ``DEFAULTS``. Команды
+    дописывают себе настройки на лету — ``harvest`` включает архив, ``top``
+    оценку, — и такая запись меняла умолчания на весь процесс: следующий
+    читатель конфига получал чужой выбор. В тестах это проявилось как
+    падение непричастных проверок после запуска команды.
+    """
+
+    def test_editing_a_config_leaves_defaults_alone(self):
+        config = Config()
+        config.data.setdefault("valuation", {})["estimate"] = True
+        assert DEFAULTS["valuation"].get("estimate") is not True
+
+    def test_two_configs_do_not_share_sections(self):
+        first, second = Config(), Config()
+        first.data["general"]["threshold_usd"] = 42
+        assert second.data["general"]["threshold_usd"] != 42
+
+    def test_nested_source_sections_are_copied_too(self):
+        config = Config()
+        config.data["sources"]["rmi_michrazim"]["active_only"] = False
+        assert DEFAULTS["sources"]["rmi_michrazim"].get("active_only") is not False
+
+    def test_merging_still_applies_the_file(self):
+        merged = _deep_merge(DEFAULTS, {"general": {"threshold_usd": 7}})
+        assert merged["general"]["threshold_usd"] == 7
+        # Остальные ключи секции переживают слияние.
+        assert "db_path" in merged["general"]

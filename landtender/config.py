@@ -71,10 +71,23 @@ DEFAULTS: dict[str, Any] = {
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-    out = dict(base)
+    """Слияние с копированием вложенных словарей.
+
+    ``dict(base)`` копирует только верхний уровень: секции, которых нет в
+    ``override``, оставались бы теми же объектами, что в ``DEFAULTS``. Команда,
+    дописывающая настройку в свой конфиг (``harvest`` включает архив, ``top`` —
+    оценку), правила бы этим общие умолчания процесса, и следующий читатель
+    конфига получал бы чужой выбор. Поэтому копируется всё дерево.
+    """
+    out: dict[str, Any] = {
+        key: _deep_merge(value, {}) if isinstance(value, dict) else value
+        for key, value in base.items()
+    }
     for key, value in override.items():
         if isinstance(value, dict) and isinstance(out.get(key), dict):
             out[key] = _deep_merge(out[key], value)
+        elif isinstance(value, dict):
+            out[key] = _deep_merge(value, {})
         else:
             out[key] = value
     return out
