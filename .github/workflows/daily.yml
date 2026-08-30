@@ -22,6 +22,10 @@ on:
         description: "Собрать архив закрытых торгов — база сравнимых сделок"
         type: boolean
         default: false
+      send_top:
+        description: "Прислать в канал топ-10 предложений"
+        type: boolean
+        default: true
       harvest_minutes:
         description: "Сколько минут собирать архив (лимит задания — 180 минут)"
         type: string
@@ -94,12 +98,25 @@ jobs:
           landtender run $flags --export-csv "data/new-$(date +%F).csv"
 
       - name: Архив закрытых торгов — база сравнимых сделок
-        # Порция намеренно небольшая: портал отвечает по паре секунд на
-        # запрос, и 900 деталей не укладываются в лимит времени задачи.
-        # Сбор накопительный — кеш отпечатков не даёт забирать одно и то же,
-        # поэтому каждый следующий запуск добирает новые тендеры.
+        # Заход ограничен собственными часами и завершается сам, сохраняя
+        # собранное. Сбор накопительный — кеш отпечатков не даёт забирать
+        # одно и то же, поэтому каждый следующий заход берёт новые тендеры.
         if: ${{ github.event.inputs.harvest == 'true' }}
         run: landtender harvest --minutes "${{ github.event.inputs.harvest_minutes || '165' }}"
+
+      - name: Топ-10 предложений
+        # Балл пересчитывается на текущих сравнимых сделках, поэтому шаг идёт
+        # после сбора архива, а не до: иначе рейтинг строился бы на вчерашней
+        # базе.
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SEND_TOP: ${{ github.event.inputs.send_top || 'true' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          flags=""
+          [ "$SEND_TOP" = "true" ] && [ "$DRY_RUN" != "true" ] && flags="--send"
+          landtender top --limit 10 $flags --out "data/top-$(date +%F).csv"
 
       - name: Сельхозземля — срез всей базы
         env:

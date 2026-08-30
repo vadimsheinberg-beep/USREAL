@@ -481,3 +481,67 @@ class TestEnrichmentWiring:
         pipeline._apply_insight(target, Broken())
         assert target.plan_signal is None
         assert target.area_sqm == 4200.0
+
+
+class TestTopLots:
+    """Топ строится на сегодняшних сравнимых, а не на числах дня загрузки.
+
+    Балл и оценка кладутся в базу при загрузке лота. База сравнимых сделок с
+    тех пор выросла с десяти записей до пятнадцати тысяч, поэтому рейтинг по
+    сохранённым числам сравнивал бы лоты по разным меркам — тот, что попал в
+    базу раньше, проигрывал бы не по существу, а по дате.
+    """
+
+    def config(self):
+        config = make_config()
+        config.data.setdefault("valuation", {})["estimate"] = True
+        return config
+
+    def store(self, storage, lots):
+        for item in lots:
+            storage.upsert_lot(item, "2026-08-30T00:00:00+00:00")
+
+    def test_stale_scores_are_recomputed(self, storage, monkeypatch):
+        """Сохранённый балл не должен решать место в рейтинге."""
+        self.store(storage, [
+            lot(source_id="устаревший", score_total=99.0, area_sqm=1000.0,
+                closing_date="2027-01-01"),
+            lot(source_id="свежий", score_total=1.0, area_sqm=1000.0,
+                closing_date="2027-01-01"),
+        ])
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: [])
+        top = pipeline.top_lots(self.config(), object(), storage, limit=10)
+        assert all(item.score_total != 99.0 for item in top)
+
+    def test_lots_without_a_score_are_left_out(self, storage, monkeypatch):
+        """Место в рейтинге без основания — это не место, а отсутствие ответа."""
+        self.store(storage, [lot(source_id="без данных", price_nis=None, units=None)])
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: [])
+        assert pipeline.top_lots(self.config(), object(), storage) == []
+
+    def test_expired_tenders_are_hidden_by_default(self, storage, monkeypatch):
+        self.store(storage, [
+            lot(source_id="просрочен", closing_date="2020-01-01", area_sqm=1000.0),
+            lot(source_id="открыт", closing_date="2027-01-01", area_sqm=1000.0),
+        ])
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: [])
+        ids = {item.source_id for item in pipeline.top_lots(self.config(), object(), storage)}
+        assert "просрочен" not in ids
+
+    def test_closed_tenders_can_be_included(self, storage, monkeypatch):
+        self.store(storage, [lot(source_id="просрочен", closing_date="2020-01-01",
+                                 area_sqm=1000.0)])
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: [])
+        top = pipeline.top_lots(self.config(), object(), storage, only_active=False)
+        assert [item.source_id for item in top] == ["просрочен"]
+
+    def test_limit_is_respected_and_order_is_by_score(self, storage, monkeypatch):
+        self.store(storage, [
+            lot(source_id=str(i), units=i * 10, area_sqm=1000.0, closing_date="2027-01-01")
+            for i in range(1, 6)
+        ])
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: [])
+        top = pipeline.top_lots(self.config(), object(), storage, limit=3)
+        assert len(top) == 3
+        scores = [item.score_total for item in top]
+        assert scores == sorted(scores, reverse=True)

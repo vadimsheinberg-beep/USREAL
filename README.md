@@ -107,6 +107,8 @@ landtender farmland --out farm.csv # таблицей
 ### Сбор сравнимых сделок
 
 ```bash
+landtender top                  # топ-10 предложений из базы по общему баллу
+landtender top --send           # то же в Telegram
 landtender harvest              # порция архива закрытых торгов
 landtender harvest --minutes 20 # заход покороче; по истечении срока
                                 # собранное сохраняется, остальное — в следующий раз

@@ -448,6 +448,43 @@ def farmland_lots(storage: Storage, only_active: bool = True) -> list[Lot]:
     return lots
 
 
+def top_lots(
+    config: Config,
+    http: HttpClient,
+    storage: Storage,
+    limit: int = 10,
+    only_active: bool = True,
+) -> list[Lot]:
+    """Лучшие предложения из базы, пересчитанные на сегодняшних сравнимых.
+
+    Балл и оценка, лежащие в базе, посчитаны в день, когда лот попал в неё, —
+    а база сравнимых сделок с тех пор выросла с десяти записей до пятнадцати
+    тысяч. Ранжировать по сохранённым числам значило бы ставить наверх лоты,
+    которым просто повезло со днём загрузки. Поэтому оценка, показатели и
+    ставка считаются заново, в памяти: сети это не требует, а рейтинг
+    получается по одной мерке для всех.
+
+    Лоты без общего балла в топ не идут: место в рейтинге без основания —
+    это не «десятое место», это отсутствие ответа.
+    """
+    today = date.today().isoformat()
+    lots = collapse_placeholders(stored_lots(storage))
+    if only_active:
+        lots = [lot for lot in lots if not is_expired(lot, today)]
+
+    comparables = build_appraiser(config, http, storage) or []
+    bidding_options = config.section("bidding")
+
+    for lot in lots:
+        if comparables:
+            _apply_estimate(lot, comparables)
+        _apply_scoring(lot, bidding_options)
+
+    ranked = [lot for lot in lots if lot.score_total is not None]
+    ranked.sort(key=lambda lot: (-(lot.score_total or 0), -(lot.price_usd or 0)))
+    return ranked[:limit]
+
+
 def collapse_placeholders(lots: Sequence[Lot]) -> list[Lot]:
     """Убирает тендер-заглушку, если по тому же тендеру есть разобранные участки.
 

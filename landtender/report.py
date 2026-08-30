@@ -451,6 +451,49 @@ def build_farmland_digest(
     return blocks
 
 
+def build_top_digest(lots: Sequence[Lot], limit: int = 10, only_active: bool = True) -> list[str]:
+    """Лучшие предложения из базы — по баллу, с разбором по каждому.
+
+    В отличие от дневной сводки здесь показываются не новинки, а лучшее из
+    всего накопленного, и все места — подробными карточками: в списке из
+    десяти строк экономить нечего, а место в рейтинге без оснований под ним
+    ничего не значит.
+
+    Номера у строк не украшение: это и есть содержание — порядок по баллу.
+    """
+    scope = "действующие тендеры" if only_active else "вся база, включая закрытые"
+    if not lots:
+        return [
+            "🏆 <b>Лучшие предложения</b>\n"
+            f"Пока нечего показать ({scope}): ни у одного лота нет балла. "
+            "Балл считается по оценке, а оценка — по сделкам из архива: "
+            "<code>landtender harvest</code>."
+        ]
+
+    shown = list(lots[:limit])
+    header = [
+        f"🏆 <b>Лучшие предложения — топ-{len(shown)}</b>",
+        f"Дата: {date.today().isoformat()} · {scope}",
+        "Порядок по общему баллу; в скобках — по скольким показателям он посчитан",
+    ]
+    priced = [lot for lot in shown if lot.price_usd]
+    if priced:
+        total = sum(lot.price_usd or 0 for lot in priced)
+        header.append(f"С ценой: {len(priced)} на {fmt_usd(total)}")
+    bargains = [lot for lot in shown if _price_verdict(lot).startswith("🟢")]
+    if bargains:
+        header.append(f"🟢 Дешевле оценки более чем на 20%: {len(bargains)}")
+
+    blocks = ["\n".join(header)]
+    lines = []
+    for place, lot in enumerate(shown, start=1):
+        card = _lot_line_html(lot)
+        # Номер места заменяет маркер списка: строка и так начинается с «• ».
+        lines.append(f"<b>{place}.</b> " + card[2:] if card.startswith("• ") else card)
+    blocks.append("\n".join(lines))
+    return blocks
+
+
 def preview_messages(blocks: Sequence[str]) -> str:
     """Показывает сводку так, как она придёт в канал — по сообщениям, а не блокам."""
     from .notify.telegram import chunk_blocks

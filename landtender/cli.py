@@ -27,6 +27,7 @@ from .pipeline import (
 from .report import (
     build_console_report,
     build_farmland_digest,
+    build_top_digest,
     export_csv,
     export_json,
     preview_messages,
@@ -100,6 +101,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="сколько минут ходить за деталями; по истечении срока обход "
              "прекращается, и собранное сохраняется (0 — без ограничения)",
     )
+
+    top_cmd = sub.add_parser(
+        "top", help="лучшие предложения из базы по общему баллу"
+    )
+    top_cmd.add_argument("--limit", type=int, default=10, help="сколько мест показать")
+    top_cmd.add_argument("--send", action="store_true", help="отправить в Telegram")
+    top_cmd.add_argument("--all", action="store_true", help="включая закрытые тендеры")
+    top_cmd.add_argument("--out", help="выгрузить список в CSV")
 
     sub.add_parser("stats", help="показать состояние базы и последний запуск")
 
@@ -401,6 +410,54 @@ def cmd_harvest(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_top(args: argparse.Namespace) -> int:
+    """Лучшие предложения из всей базы, а не только за сегодня.
+
+    Оценка и балл пересчитываются на текущих сравнимых сделках: сохранённые
+    в базе числа посчитаны в день загрузки лота, когда сравнимых было меньше,
+    и рейтинг по ним сравнивал бы лоты по разным меркам.
+    """
+    from .notify import TelegramError, TelegramNotifier
+    from .pipeline import top_lots
+
+    config = load_config(args.config)
+    # Рейтинг строится на оценке, поэтому она нужна независимо от конфига:
+    # без неё у показателя «цена против оценки» нет числа, и топ вырождается.
+    config.data.setdefault("valuation", {})["estimate"] = True
+
+    http = HttpClient(
+        user_agent=str(config.get("general", "user_agent", "landtender/0.1")),
+        timeout=int(config.get("general", "request_timeout", 45)),
+        rate_limit_delay=float(config.get("general", "rate_limit_delay", 1.0)),
+    )
+    with open_storage(config, args.db) as storage:
+        backfill_land_use(storage)
+        lots = top_lots(config, http, storage, limit=args.limit, only_active=not args.all)
+
+    blocks = build_top_digest(lots, limit=args.limit, only_active=not args.all)
+
+    if args.out:
+        export_csv(lots, Path(args.out))
+        print(f"CSV: {args.out}")
+
+    if not args.send:
+        print(preview_messages(blocks))
+        return 0
+
+    token = config.get("telegram", "bot_token")
+    chat_id = config.get("telegram", "chat_id")
+    if not token or not chat_id:
+        print("✗ Нет токена или канала. Запустите: landtender setup")
+        return 2
+    try:
+        sent = TelegramNotifier(bot_token=str(token), chat_id=str(chat_id)).send_blocks(blocks)
+    except TelegramError as exc:
+        print(f"✗ Отправка не прошла: {exc}")
+        return 1
+    print(f"✓ Топ отправлен ({sent} сообщ.): мест {len(lots)}")
+    return 0
+
+
 def cmd_farmland(args: argparse.Namespace) -> int:
     """Показывает всю сельхозземлю из базы, а не только новую за сегодня."""
     from .notify import TelegramError, TelegramNotifier
@@ -472,6 +529,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_check(args)
     if command == "farmland":
         return cmd_farmland(args)
+    if command == "top":
+        return cmd_top(args)
     if command == "harvest":
         return cmd_harvest(args)
     if command == "export":

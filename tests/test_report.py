@@ -9,6 +9,7 @@ from landtender.report import (
     build_console_report,
     build_farmland_digest,
     build_telegram_digest,
+    build_top_digest,
     export_csv,
     export_json,
     fmt_area,
@@ -566,3 +567,48 @@ class TestFmtNisShort:
 
     def test_missing(self):
         assert fmt_nis_short(None) == "—"
+
+
+class TestTopDigest:
+    """Топ лучших предложений: рейтинг из всей базы, а не новинки за день."""
+
+    def ranked(self, n=10):
+        return [
+            lot(source_id=str(i), tender_name=f"{100 + i}/2026",
+                score_total=float(95 - i * 7), score_coverage=4,
+                price_nis=1_000_000.0 * (i + 1), price_usd=300_000.0 * (i + 1))
+            for i in range(n)
+        ]
+
+    def text(self, lots, **kw):
+        return "\n".join(build_top_digest(lots, **kw))
+
+    def test_places_are_numbered_in_order(self):
+        text = self.text(self.ranked(3))
+        assert text.index("<b>1.</b>") < text.index("<b>2.</b>") < text.index("<b>3.</b>")
+
+    def test_every_place_gets_a_full_card(self):
+        """В списке из десяти строк экономить нечего — все места подробно."""
+        assert self.text(self.ranked(10)).count("🏘 единиц:") == 10
+
+    def test_limit_cuts_the_tail(self):
+        assert self.text(self.ranked(10), limit=3).count("🏘 единиц:") == 3
+
+    def test_header_counts_bargains(self):
+        cheap = lot(source_id="дешёвый", score_total=90.0,
+                    price_nis=5_000_000.0, estimate_nis=10_000_000.0)
+        assert "🟢 Дешевле оценки более чем на 20%: 1" in self.text([cheap])
+
+    def test_header_omits_bargains_when_there_are_none(self):
+        assert "Дешевле оценки" not in self.text(self.ranked(3))
+
+    def test_empty_top_explains_what_is_missing(self):
+        """Пустой топ должен объяснить, чего не хватает, а не молчать."""
+        text = self.text([])
+        assert "harvest" in text and "балл" in text
+
+    def test_scope_is_stated(self):
+        assert "вся база, включая закрытые" in self.text(self.ranked(2), only_active=False)
+
+    def test_messages_fit_the_telegram_limit(self):
+        assert all(len(m) <= 4096 for m in chunk_blocks(build_top_digest(self.ranked(10))))
