@@ -409,57 +409,180 @@ def fmt_area(sqm: float) -> str:
     return f"{sqm:,.0f} м²".replace(",", " ")
 
 
+#: Показатели в табличной строке, в порядке вывода. Имена печатаются в
+#: начале сообщения, значения — через запятую под ними: так строка остаётся
+#: короткой, а прочесть её можно, не помня порядок наизусть.
+TABLE_COLUMNS = (
+    "тендер",
+    "город",
+    "назначение",
+    "цена ₪",
+    "площадь м²",
+    "единиц",
+    "оценка ₪",
+    "к оценке %",
+    "балл",
+    "цена",
+    "смена назначения",
+    "плотность",
+    "рынок",
+    "срок",
+    "ставка ₪",
+    "ROI %",
+    "подача до",
+)
+
+
+def _num(value: float | None, digits: int = 0) -> str:
+    """Число с разделителями разрядов; пустое значение — прочерк, не ноль."""
+    if value is None:
+        return "—"
+    return f"{value:,.{digits}f}".replace(",", " ")
+
+
+def _table_row(lot: Lot) -> list[str]:
+    """Значения показателей одного лота в порядке ``TABLE_COLUMNS``."""
+    deviation = None
+    if lot.estimate_nis and lot.price_nis:
+        deviation = (lot.price_nis / lot.estimate_nis - 1.0) * 100
+
+    return [
+        escape(lot.tender_name or lot.source_id),
+        escape(lot.settlement or "—"),
+        escape(lot.purpose or "—"),
+        _num(lot.price_nis),
+        _num(lot.area_sqm),
+        fmt_units(lot),
+        _num(lot.estimate_nis),
+        f"{deviation:+.0f}" if deviation is not None else "—",
+        _num(lot.score_total),
+        _num(lot.score_price),
+        _num(lot.score_rezoning),
+        _num(lot.score_density),
+        _num(lot.score_market),
+        _num(lot.score_timing),
+        _num(lot.max_bid_nis),
+        _num(lot.roi_at_min * 100) if lot.roi_at_min is not None else "—",
+        lot.closing_date or "—",
+    ]
+
+
+def table_lines(lots: Sequence[Lot]) -> list[str]:
+    """Лоты таблицей: строка заголовка и по строке значений на лот.
+
+    Название лота остаётся ссылкой — иначе из строки нельзя попасть на сам
+    тендер, а проверить утверждение по первоисточнику важнее краткости.
+    """
+    lines = ["<i>" + ", ".join(TABLE_COLUMNS) + "</i>"]
+    for lot in lots:
+        values = _table_row(lot)
+        if lot.url:
+            values[0] = f'<a href="{escape(lot.url)}">{values[0]}</a>'
+        lines.append("• " + ", ".join(values))
+    return lines
+
+
 def build_farmland_digest(
     lots: Sequence[Lot],
     max_lots: int = 60,
     only_active: bool = True,
+    max_usd: float | None = None,
 ) -> list[str]:
-    """Сводка по всей сельхозземле в базе — ответ на «покажи всю сельхозземлю».
+    """Сводка по сельхозземле из базы — ответ на «покажи всю сельхозземлю».
 
-    Дневной дайджест по устройству показывает только новое, поэтому земля,
-    найденная неделю назад, в него уже не попадёт. Здесь наоборот: срез базы
-    целиком, отсортированный по цене.
+    Дневная сводка по устройству показывает только новое, поэтому земля,
+    найденная неделю назад, в неё уже не попадёт. Здесь наоборот: срез базы,
+    отсортированный по баллу и цене.
+
+    ``max_usd`` отсекает дорогое. Лоты, у которых цены ещё нет, под порог не
+    подпадают — про них неизвестно, дороги они или дёшевы, — но и молча
+    исчезнуть не должны: их число называется в заголовке.
     """
     scope = "действующие тендеры" if only_active else "вся база, включая закрытые"
+    priced = [lot for lot in lots if lot.price_usd]
+    priceless = [lot for lot in lots if not lot.price_usd]
+    if max_usd is not None:
+        priced = [lot for lot in priced if (lot.price_usd or 0) <= max_usd]
+
+    shown = sort_by_price(priced)
+    # «Ничего не нашлось» и «нашлось, но дороже порога» — разные сообщения:
+    # первое про пустую базу, второе про заданное условие.
     if not lots:
         return [f"🌾 <b>Сельхозземля на тендерах</b>\nНичего не найдено ({scope})."]
 
-    area = sum(lot.area_sqm or 0 for lot in lots)
-    priced = [lot for lot in lots if lot.price_usd]
+    area = sum(lot.area_sqm or 0 for lot in shown)
     header = [
         "🌾 <b>Сельхозземля на тендерах</b>",
         f"Дата: {date.today().isoformat()} · {scope}",
-        f"Лотов: {len(lots)}" + (f" · площадь: {fmt_area(area)}" if area else ""),
     ]
-    if priced:
-        total = sum(lot.price_usd or 0 for lot in priced)
-        header.append(f"С ценой: {len(priced)} на {fmt_usd(total)}")
+    if max_usd is not None:
+        header.append(f"Порог цены: до {fmt_usd(max_usd)}")
+    header.append(
+        f"Лотов: {len(shown)}" + (f" · площадь: {fmt_area(area)}" if area else "")
+    )
+    if shown:
+        total = sum(lot.price_usd or 0 for lot in shown)
+        header.append(f"Общая цена: {fmt_usd(total)}")
+    if priceless:
+        header.append(
+            f"Без объявленной цены: {len(priceless)} — попадут в срез, когда цена появится"
+        )
 
     blocks = ["\n".join(header)]
-    ordered = sort_by_price(lots)
-    shown = ordered[:max_lots]
-    lines = []
-    if len(shown) > FULL_CARDS:
-        lines.append(f"Подробно — первые {FULL_CARDS} по баллу, остальные строкой")
-    for position, lot in enumerate(shown):
-        lines.append(
-            _lot_line_html(lot) if position < FULL_CARDS else _lot_compact_html(lot)
-        )
-    if len(ordered) > max_lots:
-        lines.append(f"…и ещё {len(ordered) - max_lots}")
+    if not shown:
+        blocks.append("Под порог цены пока ничего не подходит.")
+        return blocks
+
+    lines = table_lines(shown[:max_lots])
+    if len(shown) > max_lots:
+        lines.append(f"…и ещё {len(shown) - max_lots}")
+    blocks.append("\n".join(lines))
+    return blocks
+
+
+def build_city_digest(
+    lots: Sequence[Lot],
+    city: str,
+    max_usd: float | None = None,
+    max_lots: int = 60,
+    only_active: bool = True,
+) -> list[str]:
+    """Срез по городу и назначению — «что есть в Иерусалиме до миллиона».
+
+    Заголовок называет вещи своими именами: это участки земельных торгов, а
+    не квартиры вторичного рынка. Реестр рм"и торгует землёй; принять одно за
+    другое — самая дорогая ошибка, которую здесь можно сделать.
+    """
+    scope = "действующие тендеры" if only_active else "вся база, включая закрытые"
+    shown = sort_by_price(lots)
+    header = [
+        f"🏙 <b>Участки под жильё · {escape(city)}</b>",
+        f"Дата: {date.today().isoformat()} · {scope}",
+    ]
+    if max_usd is not None:
+        header.append(f"Порог цены: до {fmt_usd(max_usd)}")
+    header.append("Это участки земельных торгов, а не квартиры вторичного рынка.")
+
+    if not shown:
+        header.append("Под условия ничего не подошло.")
+        return ["\n".join(header)]
+
+    total = sum(lot.price_usd or 0 for lot in shown if lot.price_usd)
+    header.append(f"Лотов: {len(shown)}" + (f" · общая цена: {fmt_usd(total)}" if total else ""))
+
+    blocks = ["\n".join(header)]
+    lines = table_lines(shown[:max_lots])
+    if len(shown) > max_lots:
+        lines.append(f"…и ещё {len(shown) - max_lots}")
     blocks.append("\n".join(lines))
     return blocks
 
 
 def build_top_digest(lots: Sequence[Lot], limit: int = 10, only_active: bool = True) -> list[str]:
-    """Лучшие предложения из базы — по баллу, с разбором по каждому.
+    """Лучшие предложения из базы — по баллу, все показатели в строке.
 
-    В отличие от дневной сводки здесь показываются не новинки, а лучшее из
-    всего накопленного, и все места — подробными карточками: в списке из
-    десяти строк экономить нечего, а место в рейтинге без оснований под ним
-    ничего не значит.
-
-    Номера у строк не украшение: это и есть содержание — порядок по баллу.
+    В отличие от дневной сводки здесь не новинки, а лучшее из накопленного.
+    Номера мест не украшение: это и есть содержание — порядок по баллу.
     """
     scope = "действующие тендеры" if only_active else "вся база, включая закрытые"
     if not lots:
@@ -474,7 +597,7 @@ def build_top_digest(lots: Sequence[Lot], limit: int = 10, only_active: bool = T
     header = [
         f"🏆 <b>Лучшие предложения — топ-{len(shown)}</b>",
         f"Дата: {date.today().isoformat()} · {scope}",
-        "Порядок по общему баллу; в скобках — по скольким показателям он посчитан",
+        "Порядок по общему баллу",
     ]
     priced = [lot for lot in shown if lot.price_usd]
     if priced:
@@ -485,12 +608,13 @@ def build_top_digest(lots: Sequence[Lot], limit: int = 10, only_active: bool = T
         header.append(f"🟢 Дешевле оценки более чем на 20%: {len(bargains)}")
 
     blocks = ["\n".join(header)]
-    lines = []
-    for place, lot in enumerate(shown, start=1):
-        card = _lot_line_html(lot)
-        # Номер места заменяет маркер списка: строка и так начинается с «• ».
-        lines.append(f"<b>{place}.</b> " + card[2:] if card.startswith("• ") else card)
-    blocks.append("\n".join(lines))
+    lines = table_lines(shown)
+    # Номер места заменяет маркер списка: порядок здесь и есть содержание.
+    numbered = [lines[0]] + [
+        (f"<b>{place}.</b> " + line[2:]) if line.startswith("• ") else line
+        for place, line in enumerate(lines[1:], start=1)
+    ]
+    blocks.append("\n".join(numbered))
     return blocks
 
 

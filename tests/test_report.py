@@ -7,6 +7,7 @@ from landtender.notify.telegram import chunk_blocks
 from landtender.report import (
     FULL_CARDS,
     build_console_report,
+    build_city_digest,
     build_farmland_digest,
     build_telegram_digest,
     build_top_digest,
@@ -272,7 +273,26 @@ class TestFarmlandDigest:
     def test_priced_lots_are_summed(self):
         lots = [self.farm(), self.farm(source_id="2", price_usd=None)]
         text = "\n".join(build_farmland_digest(lots))
-        assert "С ценой: 1 на $5.08 млн" in text
+        assert "Общая цена: $5.08 млн" in text
+
+    def test_priceless_lots_are_counted_not_dropped(self):
+        """Про лот без цены неизвестно, дёшев он или дорог, — но и молчать о нём нельзя."""
+        lots = [self.farm(), self.farm(source_id="2", price_usd=None)]
+        text = "\n".join(build_farmland_digest(lots, max_usd=100_000))
+        assert "Без объявленной цены: 1" in text
+
+    def test_the_price_ceiling_filters(self):
+        lots = [
+            self.farm(source_id="дешёвый", price_usd=90_000.0),
+            self.farm(source_id="дорогой", price_usd=900_000.0),
+        ]
+        text = "\n".join(build_farmland_digest(lots, max_usd=100_000))
+        assert "Порог цены: до $100 000" in text
+        assert "Лотов: 1" in text
+
+    def test_nothing_under_the_ceiling_says_so(self):
+        text = "\n".join(build_farmland_digest([self.farm()], max_usd=1_000.0))
+        assert "Под порог цены пока ничего не подходит" in text
 
     def test_scope_is_stated(self):
         active = "\n".join(build_farmland_digest([self.farm()], only_active=True))
@@ -286,9 +306,12 @@ class TestFarmlandDigest:
         assert "…и ещё 7" in text
 
     def test_expensive_first(self):
-        lots = [self.farm(price_usd=2_000.0), self.farm(source_id="2", price_usd=7_000_000.0)]
+        lots = [
+            self.farm(price_usd=2_000.0, price_nis=7_280.0),
+            self.farm(source_id="2", price_usd=7_000_000.0, price_nis=25_480_000.0),
+        ]
         body = build_farmland_digest(lots)[1]
-        assert body.index("$7.00 млн") < body.index("$2 000")
+        assert body.index("25 480 000") < body.index("7 280")
 
 
 class TestFmtArea:
@@ -587,12 +610,15 @@ class TestTopDigest:
         text = self.text(self.ranked(3))
         assert text.index("<b>1.</b>") < text.index("<b>2.</b>") < text.index("<b>3.</b>")
 
-    def test_every_place_gets_a_full_card(self):
-        """В списке из десяти строк экономить нечего — все места подробно."""
-        assert self.text(self.ranked(10)).count("🏘 единиц:") == 10
+    def test_every_place_gets_a_row(self):
+        """Показатели идут строкой на лот, имена — один раз в начале."""
+        text = self.text(self.ranked(10))
+        assert text.count("<b>10.</b>") == 1
+        assert text.count("тендер, город, назначение") == 1
 
     def test_limit_cuts_the_tail(self):
-        assert self.text(self.ranked(10), limit=3).count("🏘 единиц:") == 3
+        text = self.text(self.ranked(10), limit=3)
+        assert "<b>3.</b>" in text and "<b>4.</b>" not in text
 
     def test_header_counts_bargains(self):
         cheap = lot(source_id="дешёвый", score_total=90.0,
@@ -612,3 +638,85 @@ class TestTopDigest:
 
     def test_messages_fit_the_telegram_limit(self):
         assert all(len(m) <= 4096 for m in chunk_blocks(build_top_digest(self.ranked(10))))
+
+
+class TestTableFormat:
+    """Показатели строкой через запятую, имена — один раз в начале.
+
+    Так строка остаётся короткой, а прочесть её можно, не помня порядок
+    столбцов наизусть.
+    """
+
+    def valued(self, **kw):
+        data = dict(
+            settlement="ירושלים", purpose="מגורים", price_nis=3_000_000.0,
+            price_usd=800_000.0, area_sqm=500.0, units=4, estimate_nis=4_000_000.0,
+            score_total=72.0, score_price=87.0, score_density=100.0,
+            max_bid_nis=2_900_000.0, roi_at_min=0.31, closing_date="2026-12-01",
+        )
+        data.update(kw)
+        return lot(**data)
+
+    def test_header_names_every_column(self):
+        from landtender.report import TABLE_COLUMNS, table_lines
+
+        header = table_lines([self.valued()])[0]
+        for name in TABLE_COLUMNS:
+            assert name in header
+
+    def test_a_row_has_one_value_per_column(self):
+        from landtender.report import TABLE_COLUMNS, table_lines
+
+        row = table_lines([self.valued()])[1]
+        assert row.count(",") == len(TABLE_COLUMNS) - 1
+
+    def test_missing_values_are_dashes_not_zeros(self):
+        """Ноль и «неизвестно» — разные утверждения о лоте."""
+        from landtender.report import table_lines
+
+        row = table_lines([self.valued(estimate_nis=None, score_market=None)])[1]
+        assert "—" in row
+
+    def test_deviation_from_the_estimate_is_signed(self):
+        from landtender.report import table_lines
+
+        cheap = table_lines([self.valued(price_nis=2_000_000.0)])[1]
+        dear = table_lines([self.valued(price_nis=8_000_000.0)])[1]
+        assert "-50" in cheap
+        assert "+100" in dear
+
+    def test_the_name_stays_a_link(self):
+        """Из строки нужно попасть на сам тендер: проверить важнее краткости."""
+        from landtender.report import table_lines
+
+        assert "<a href=" in table_lines([self.valued()])[1]
+
+
+class TestCityDigest:
+    """Срез по городу называет вещи своими именами."""
+
+    def resid(self, **kw):
+        data = dict(settlement="ירושלים", purpose="מגורים",
+                    price_usd=800_000.0, price_nis=3_000_000.0)
+        data.update(kw)
+        return lot(**data)
+
+    def text(self, lots, **kw):
+        return "\n".join(build_city_digest(lots, city="Иерусалим", **kw))
+
+    def test_it_does_not_call_plots_apartments(self):
+        """В базе земельные торги, а не вторичный рынок жилья."""
+        text = self.text([self.resid()])
+        assert "участки земельных торгов, а не квартиры" in text
+        assert "Участки под жильё" in text
+
+    def test_the_ceiling_is_stated(self):
+        assert "Порог цены: до $1.00 млн" in self.text([self.resid()], max_usd=1_000_000)
+
+    def test_empty_result_says_so(self):
+        assert "Под условия ничего не подошло" in self.text([])
+
+    def test_rows_use_the_table_format(self):
+        from landtender.report import TABLE_COLUMNS
+
+        assert ", ".join(TABLE_COLUMNS) in self.text([self.resid()])

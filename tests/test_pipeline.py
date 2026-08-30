@@ -691,3 +691,58 @@ class TestClosedDealsAreNotOffers:
         )
         monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: comparables_for())
         assert len(pipeline.top_lots(self.config(), object(), storage)) == 1
+
+
+class TestCityLots:
+    """Срез по городу: написание города не должно решать судьбу лота."""
+
+    def fill(self, storage, lots):
+        for item in lots:
+            storage.upsert_lot(item, "2026-08-30T00:00:00+00:00")
+
+    def test_any_spelling_of_the_city_matches(self, storage):
+        self.fill(storage, [
+            lot(source_id="1", settlement="ירושלים", purpose="מגורים",
+                price_usd=500_000.0, closing_date="2027-01-01"),
+        ])
+        for spelling in ("Иерусалим", "ירושלים", "Jerusalem"):
+            found = pipeline.city_lots(storage, city=spelling)
+            assert [item.source_id for item in found] == ["1"], spelling
+
+    def test_other_cities_are_left_out(self, storage):
+        self.fill(storage, [
+            lot(source_id="иерусалим", settlement="ירושלים", purpose="מגורים",
+                price_usd=100.0, closing_date="2027-01-01"),
+            lot(source_id="хайфа", settlement="חיפה", purpose="מגורים",
+                price_usd=100.0, closing_date="2027-01-01"),
+        ])
+        found = pipeline.city_lots(storage, city="Иерусалим")
+        assert [item.source_id for item in found] == ["иерусалим"]
+
+    def test_purpose_matches_by_substring(self, storage):
+        """Портал пишет назначение свободным текстом: «מגורים ומסחר» — тоже жильё."""
+        self.fill(storage, [
+            lot(source_id="смешанное", settlement="ירושלים", purpose="מגורים ומסחר",
+                price_usd=100.0, closing_date="2027-01-01"),
+            lot(source_id="торговля", settlement="ירושלים", purpose="מסחר",
+                price_usd=100.0, closing_date="2027-01-01"),
+        ])
+        found = pipeline.city_lots(storage, city="Иерусалим", purpose="מגורים")
+        assert [item.source_id for item in found] == ["смешанное"]
+
+    def test_the_price_ceiling_applies(self, storage):
+        self.fill(storage, [
+            lot(source_id="дешёвый", settlement="ירושלים", purpose="מגורים",
+                price_usd=900_000.0, closing_date="2027-01-01"),
+            lot(source_id="дорогой", settlement="ירושלים", purpose="מגורים",
+                price_usd=1_500_000.0, closing_date="2027-01-01"),
+        ])
+        found = pipeline.city_lots(storage, city="Иерусалим", max_usd=1_000_000)
+        assert [item.source_id for item in found] == ["дешёвый"]
+
+    def test_expired_tenders_are_hidden(self, storage):
+        self.fill(storage, [
+            lot(source_id="просрочен", settlement="ירושלים", purpose="מגורים",
+                price_usd=100.0, closing_date="2020-01-01"),
+        ])
+        assert pipeline.city_lots(storage, city="Иерусалим") == []

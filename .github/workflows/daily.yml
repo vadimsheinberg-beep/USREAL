@@ -22,10 +22,22 @@ on:
         description: "Собрать архив закрытых торгов — база сравнимых сделок"
         type: boolean
         default: false
+      send_city:
+        description: "Прислать в канал срез по Иерусалиму"
+        type: boolean
+        default: true
       send_top:
         description: "Прислать в канал топ-10 предложений"
         type: boolean
         default: true
+      cadastre:
+        description: "Прогнать кадастр govmap по накопленной базе"
+        type: boolean
+        default: false
+      cadastre_minutes:
+        description: "Сколько минут добирать площади из кадастра"
+        type: string
+        default: "120"
       harvest_minutes:
         description: "Сколько минут собирать архив (лимит задания — 180 минут)"
         type: string
@@ -104,6 +116,13 @@ jobs:
         if: ${{ github.event.inputs.harvest == 'true' }}
         run: landtender harvest --minutes "${{ github.event.inputs.harvest_minutes || '165' }}"
 
+      - name: Кадастр govmap — добрать недостающие площади
+        # Площадь-заглушка («1 м²») закрывает лоту дорогу и в оценку, и в
+        # сравнимые. Ежедневный обход дополняет десятки лотов, накопленное
+        # так не закрыть — отсюда отдельный проход, ограниченный часами.
+        if: ${{ github.event.inputs.cadastre == 'true' }}
+        run: landtender enrich --minutes "${{ github.event.inputs.cadastre_minutes || '120' }}"
+
       - name: Топ-10 предложений
         # Балл пересчитывается на текущих сравнимых сделках, поэтому шаг идёт
         # после сбора архива, а не до: иначе рейтинг строился бы на вчерашней
@@ -118,15 +137,28 @@ jobs:
           [ "$SEND_TOP" = "true" ] && [ "$DRY_RUN" != "true" ] && flags="--send"
           landtender top --limit 10 --why $flags --out "data/top-$(date +%F).csv"
 
-      - name: Сельхозземля — срез всей базы
+      - name: Сельхозземля дешевле $100 000
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          SEND_FARMLAND: ${{ github.event.inputs.send_farmland }}
+          SEND_FARMLAND: ${{ github.event.inputs.send_farmland || 'true' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
         run: |
           flags=""
-          [ "$SEND_FARMLAND" = "true" ] && flags="--send"
-          landtender farmland $flags --out "data/farmland-$(date +%F).csv"
+          [ "$SEND_FARMLAND" = "true" ] && [ "$DRY_RUN" != "true" ] && flags="--send"
+          landtender farmland --max-usd 100000 $flags --out "data/farmland-$(date +%F).csv"
+
+      - name: Иерусалим — участки под жильё до $1 000 000
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SEND_CITY: ${{ github.event.inputs.send_city || 'true' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          flags=""
+          [ "$SEND_CITY" = "true" ] && [ "$DRY_RUN" != "true" ] && flags="--send"
+          landtender city --city ירושלים --max-usd 1000000 $flags \
+            --out "data/jerusalem-$(date +%F).csv"
 
       - name: Сохранить выгрузку как артефакт
         if: always()

@@ -448,6 +448,63 @@ def farmland_lots(storage: Storage, only_active: bool = True) -> list[Lot]:
     return lots
 
 
+def enrich_stored_lots(
+    config: Config,
+    http: HttpClient,
+    storage: Storage,
+    minutes: float = 165.0,
+    only_missing_area: bool = True,
+) -> dict[str, int]:
+    """Прогоняет кадастр govmap по уже накопленной базе.
+
+    Ежедневный обход дополняет несколько десятков лотов за раз — это верно
+    для новинок, но не закрывает накопленное: у 1497 лотов площадь пришла
+    заглушкой, и без настоящей площади их нельзя ни оценить, ни сравнить.
+
+    Как и сбор архива, проход ограничен часами, а не числом лотов: сколько
+    ответит чужой сервис, заранее неизвестно, и по истечении срока обход
+    прекращается штатно, сохранив всё добытое.
+    """
+    from .invest import MIN_CREDIBLE_AREA_SQM, apply as apply_insight
+
+    enricher = build_enricher(config, http)
+    if enricher is None:
+        log.info("Дополнение выключено — включите [enrichment] enabled")
+        return {"выключено": 1}
+
+    lots = stored_lots(storage)
+    if only_missing_area:
+        lots = [
+            lot for lot in lots
+            if (lot.area_sqm or 0) < MIN_CREDIBLE_AREA_SQM and lot.gush and lot.chelka
+        ]
+
+    counts = {"кандидатов": len(lots), "просмотрено": 0, "площадь добыта": 0, "не найдено": 0}
+    deadline = time.monotonic() + minutes * 60 if minutes > 0 else None
+    now = utcnow_iso()
+
+    for lot in lots:
+        if deadline is not None and time.monotonic() >= deadline:
+            log.warning(
+                "Кадастр: вышло время (%.0f мин), просмотрено %d из %d",
+                minutes, counts["просмотрено"], counts["кандидатов"],
+            )
+            break
+        counts["просмотрено"] += 1
+        before = lot.area_sqm
+        _apply_insight(lot, enricher)
+        if (lot.area_sqm or 0) != (before or 0):
+            counts["площадь добыта"] += 1
+            storage.upsert_lot(lot, now)
+        else:
+            counts["не найдено"] += 1
+        # Бюджет счётчика у дополнителя свой; здесь правит время, поэтому
+        # счётчик сбрасывается, иначе проход остановился бы на сороковом лоте.
+        enricher.used = 0
+
+    return counts
+
+
 def backfill_settlement_codes(config: Config, http: HttpClient, storage: Storage) -> int:
     """Достаёт коды населённых пунктов из поиска рм"и для уже накопленных лотов.
 
@@ -579,6 +636,38 @@ def explain_top(
     if only_active:
         lots = [lot for lot in lots if not is_expired(lot, today)]
     return explain_estimates(lots, build_appraiser(config, http, storage) or [])
+
+
+def city_lots(
+    storage: Storage,
+    city: str,
+    purpose: str | None = None,
+    max_usd: float | None = None,
+    only_active: bool = True,
+) -> list[Lot]:
+    """Лоты одного города: по назначению и потолку цены.
+
+    Город сверяется через ``places``: у израильских городов десяток
+    написаний, и «Иерусалим», «ירושלים» и «Jerusalem» обязаны означать одно.
+    Назначение сверяется вхождением строки — портал пишет его свободным
+    текстом («מגורים», «מגורים ומסחר»), и точное равенство отсекало бы лишнее.
+    """
+    today = date.today().isoformat()
+    lots = collapse_placeholders(stored_lots(storage))
+    if only_active:
+        lots = [lot for lot in lots if not is_expired(lot, today)]
+
+    # Название приводится к каноническому до сравнения: matches() сверяет
+    # строки как есть, а «Иерусалим» в ивритском поле не встретится никогда.
+    from .places import resolve as resolve_places
+
+    names, _ = resolve_places([city])
+    lots = [lot for lot in lots if place_matches(lot.settlement, names or [city])]
+    if purpose:
+        lots = [lot for lot in lots if purpose in (lot.purpose or "")]
+    if max_usd is not None:
+        lots = [lot for lot in lots if lot.price_usd and lot.price_usd <= max_usd]
+    return lots
 
 
 def collapse_placeholders(lots: Sequence[Lot]) -> list[Lot]:

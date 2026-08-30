@@ -107,6 +107,9 @@ landtender farmland --out farm.csv # таблицей
 ### Сбор сравнимых сделок
 
 ```bash
+landtender enrich               # добрать площади из кадастра govmap по всей базе
+landtender city --city ירושלים --max-usd 1000000   # участки под жильё в городе
+landtender farmland --max-usd 100000               # сельхозземля дешевле порога
 landtender top                  # топ-10 предложений из базы по общему баллу
 landtender top --send           # то же в Telegram
 landtender harvest              # порция архива закрытых торгов

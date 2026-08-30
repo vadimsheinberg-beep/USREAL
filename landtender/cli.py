@@ -87,6 +87,10 @@ def build_parser() -> argparse.ArgumentParser:
     farm_cmd.add_argument("--send", action="store_true", help="отправить сводку в Telegram")
     farm_cmd.add_argument("--out", help="сохранить список в CSV")
     farm_cmd.add_argument("--limit", type=int, default=60, help="сколько лотов показать")
+    farm_cmd.add_argument(
+        "--max-usd", type=float,
+        help="потолок цены в долларах; лоты без объявленной цены считаются отдельно",
+    )
 
     harvest_cmd = sub.add_parser(
         "harvest", help="собрать архив закрытых торгов — база сравнимых сделок"
@@ -113,6 +117,30 @@ def build_parser() -> argparse.ArgumentParser:
         "--why", action="store_true",
         help="показать, почему лоты остались без оценки (счётчики причин)",
     )
+
+    enrich_cmd = sub.add_parser(
+        "enrich", help="прогнать кадастр govmap по накопленной базе"
+    )
+    enrich_cmd.add_argument(
+        "--minutes", type=float, default=165.0,
+        help="сколько минут ходить за кадастром; по истечении срока обход "
+             "прекращается, и добытое сохраняется (0 — без ограничения)",
+    )
+    enrich_cmd.add_argument(
+        "--all", action="store_true",
+        help="все лоты, а не только с недостающей площадью",
+    )
+
+    city_cmd = sub.add_parser(
+        "city", help="срез по городу: участки под жильё дешевле порога"
+    )
+    city_cmd.add_argument("--city", required=True, help="город (любое написание)")
+    city_cmd.add_argument("--max-usd", type=float, help="потолок цены в долларах")
+    city_cmd.add_argument("--purpose", default="מגורים", help="назначение по документам")
+    city_cmd.add_argument("--limit", type=int, default=60, help="сколько лотов показать")
+    city_cmd.add_argument("--send", action="store_true", help="отправить в Telegram")
+    city_cmd.add_argument("--all", action="store_true", help="включая закрытые тендеры")
+    city_cmd.add_argument("--out", help="выгрузить список в CSV")
 
     sub.add_parser("stats", help="показать состояние базы и последний запуск")
 
@@ -472,6 +500,74 @@ def cmd_top(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_enrich(args: argparse.Namespace) -> int:
+    """Прогоняет кадастр govmap по всей накопленной базе.
+
+    Ежедневный обход дополняет несколько десятков лотов за раз, и накопленное
+    так не закрыть: у полутора тысяч лотов площадь пришла заглушкой, а без
+    настоящей площади их нельзя ни оценить, ни сравнить.
+    """
+    from .pipeline import build_http, enrich_stored_lots
+
+    config = load_config(args.config)
+    # Команда для того и вызвана, поэтому дополнение включается независимо от
+    # конфига: иначе она молча ничего бы не сделала.
+    config.data.setdefault("enrichment", {})["enabled"] = True
+
+    http = build_http(config)
+    with open_storage(config, args.db) as storage:
+        counts = enrich_stored_lots(
+            config, http, storage,
+            minutes=args.minutes, only_missing_area=not args.all,
+        )
+
+    for name, value in counts.items():
+        print(f"  {name:<18} {value}")
+    return 0
+
+
+def cmd_city(args: argparse.Namespace) -> int:
+    """Срез по городу: участки заданного назначения дешевле порога."""
+    from .notify import TelegramError, TelegramNotifier
+    from .pipeline import city_lots
+
+    config = load_config(args.config)
+    with open_storage(config, args.db) as storage:
+        lots = city_lots(
+            storage,
+            city=args.city,
+            purpose=args.purpose,
+            max_usd=args.max_usd,
+            only_active=not args.all,
+        )
+
+    blocks = build_city_digest(
+        lots, city=args.city, max_usd=args.max_usd,
+        max_lots=args.limit, only_active=not args.all,
+    )
+
+    if args.out:
+        export_csv(lots, Path(args.out))
+        print(f"CSV: {args.out}")
+
+    if not args.send:
+        print(preview_messages(blocks))
+        return 0
+
+    token = config.get("telegram", "bot_token")
+    chat_id = config.get("telegram", "chat_id")
+    if not token or not chat_id:
+        print("✗ Нет токена или канала. Запустите: landtender setup")
+        return 2
+    try:
+        sent = TelegramNotifier(bot_token=str(token), chat_id=str(chat_id)).send_blocks(blocks)
+    except TelegramError as exc:
+        print(f"✗ Отправка не прошла: {exc}")
+        return 1
+    print(f"✓ Срез по городу отправлен ({sent} сообщ.): лотов {len(lots)}")
+    return 0
+
+
 def cmd_farmland(args: argparse.Namespace) -> int:
     """Показывает всю сельхозземлю из базы, а не только новую за сегодня."""
     from .notify import TelegramError, TelegramNotifier
@@ -482,7 +578,9 @@ def cmd_farmland(args: argparse.Namespace) -> int:
         backfill_land_use(storage)
         lots = farmland_lots(storage, only_active=not args.all)
 
-    blocks = build_farmland_digest(lots, max_lots=args.limit, only_active=not args.all)
+    blocks = build_farmland_digest(
+        lots, max_lots=args.limit, only_active=not args.all, max_usd=args.max_usd
+    )
 
     if args.out:
         export_csv(lots, Path(args.out))
@@ -545,6 +643,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_farmland(args)
     if command == "top":
         return cmd_top(args)
+    if command == "city":
+        return cmd_city(args)
+    if command == "enrich":
+        return cmd_enrich(args)
     if command == "harvest":
         return cmd_harvest(args)
     if command == "export":
