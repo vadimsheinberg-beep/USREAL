@@ -25,6 +25,7 @@ from .pipeline import (
     stored_lots,
 )
 from .report import (
+    build_city_digest,
     build_console_report,
     build_farmland_digest,
     build_top_digest,

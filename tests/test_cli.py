@@ -254,6 +254,23 @@ class TestFarmlandCommand:
         assert "מכרז מגורים" not in text
 
 
+class JerusalemSource(Source):
+    """Участки под жильё в Иерусалиме — предмет команды city."""
+
+    name = "fake"
+    title = "тестовый источник"
+
+    def fetch(self):
+        return [
+            Lot(source="fake", source_id="1", tender_name="иерусалимский",
+                settlement="ירושלים", purpose="מגורים", price_nis=2_000_000.0,
+                area_sqm=500.0, closing_date="2099-01-01"),
+            Lot(source="fake", source_id="2", tender_name="хайфский",
+                settlement="חיפה", purpose="מגורים", price_nis=2_000_000.0,
+                area_sqm=500.0, closing_date="2099-01-01"),
+        ]
+
+
 class ScorableSource(Source):
     """Лоты, которым есть чем набрать балл: площадь, единицы и срок подачи."""
 
@@ -330,6 +347,68 @@ class TestTopCommand:
         capsys.readouterr()
         assert cli.main(["--config", str(config_file), "top", "--send"]) == 2
         assert "Нет токена" in capsys.readouterr().out
+
+
+class TestCityCommand:
+    """Команда целиком, а не только её начинка.
+
+    Прогон упал на NameError: в модуле не было импорта, которым команда
+    пользовалась. Ровно та же ошибка уже случалась с топом, и тогда же был
+    сделан вывод — каждая команда должна проверяться запуском. Для city и
+    enrich этот вывод я применить забыл, и она повторилась.
+    """
+
+    @pytest.fixture(autouse=True)
+    def city_source(self, monkeypatch):
+        monkeypatch.setattr(pipeline, "SOURCES_BY_NAME", {"fake": JerusalemSource})
+        monkeypatch.setattr(cli, "SOURCES_BY_NAME", {"fake": JerusalemSource})
+
+    def fill(self, config_file):
+        cli.main(["--config", str(config_file), "run", "--sources", "fake", "--no-notify"])
+
+    def test_it_runs_and_prints_the_slice(self, config_file, capsys):
+        self.fill(config_file)
+        capsys.readouterr()
+        code = cli.main(["--config", str(config_file), "city", "--city", "Иерусалим"])
+        assert code == 0
+        assert "Участки под жильё" in capsys.readouterr().out
+
+    def test_the_price_ceiling_reaches_the_digest(self, config_file, capsys):
+        self.fill(config_file)
+        capsys.readouterr()
+        cli.main([
+            "--config", str(config_file), "city",
+            "--city", "Иерусалим", "--max-usd", "1000000",
+        ])
+        assert "Порог цены: до $1.00 млн" in capsys.readouterr().out
+
+    def test_csv_export(self, config_file, tmp_path):
+        self.fill(config_file)
+        out = tmp_path / "city.csv"
+        cli.main([
+            "--config", str(config_file), "city", "--city", "Иерусалим",
+            "--out", str(out),
+        ])
+        assert out.exists()
+
+    def test_send_without_a_token_says_so(self, config_file, capsys):
+        self.fill(config_file)
+        capsys.readouterr()
+        code = cli.main([
+            "--config", str(config_file), "city", "--city", "Иерусалим", "--send",
+        ])
+        assert code == 2
+        assert "Нет токена" in capsys.readouterr().out
+
+
+class TestEnrichCommand:
+    """Прогон кадастра по базе: команда должна запускаться и без сети."""
+
+    def test_it_runs_and_reports_counts(self, config_file, capsys, monkeypatch):
+        monkeypatch.setattr(pipeline, "build_enricher", lambda *a, **k: None)
+        code = cli.main(["--config", str(config_file), "enrich", "--minutes", "0"])
+        assert code == 0
+        assert "выключено" in capsys.readouterr().out
 
 
 def test_stats_command_reports_empty_database(config_file, capsys):
