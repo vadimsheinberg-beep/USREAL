@@ -183,3 +183,44 @@ class TestMigration:
                 store.upsert_lot(make_lot(), LATER)
         with Storage(path) as store:
             assert store.count_lots() == 2
+
+
+class TestSettlementCodeBackfill:
+    """Колонка появилась позже базы — заполнить её надо, не перезабирая архив.
+
+    Код населённого пункта нужен для сравнения участков между собой. Миграция
+    добавляет колонку пустой, а архив закрытых торгов заново не забирается:
+    это шесть часов запросов. Код при этом лежит в ответе поиска — один
+    запрос на все десять тысяч тендеров.
+    """
+
+    def lot(self, source_id, tender_id, **kw):
+        return Lot(source="rmi_michrazim", source_id=source_id,
+                   tender_id=tender_id, tender_name="тест", **kw)
+
+    def test_codes_land_on_lots_by_tender(self, tmp_path):
+        with Storage(tmp_path / "s.sqlite3") as store:
+            store.upsert_lot(self.lot("1", "20250142"), NOW)
+            store.upsert_lot(self.lot("2", "20250142"), NOW)
+            assert store.set_settlement_codes("rmi_michrazim", {"20250142": 4000}) == 2
+            rows = list(store.iter_lots())
+            assert all(row["settlement_code"] == 4000 for row in rows)
+
+    def test_existing_codes_are_left_alone(self, tmp_path):
+        """Шаг должен быть повторяемым и не затирать то, что пришло от портала."""
+        with Storage(tmp_path / "s.sqlite3") as store:
+            store.upsert_lot(self.lot("1", "20250142", settlement_code=9000), NOW)
+            store.set_settlement_codes("rmi_michrazim", {"20250142": 4000})
+            assert list(store.iter_lots())[0]["settlement_code"] == 9000
+
+    def test_other_sources_are_untouched(self, tmp_path):
+        with Storage(tmp_path / "s.sqlite3") as store:
+            store.upsert_lot(
+                Lot(source="yad2", source_id="1", tender_id="20250142", tender_name="т"),
+                NOW,
+            )
+            assert store.set_settlement_codes("rmi_michrazim", {"20250142": 4000}) == 0
+
+    def test_nothing_to_do_is_not_an_error(self, tmp_path):
+        with Storage(tmp_path / "s.sqlite3") as store:
+            assert store.set_settlement_codes("rmi_michrazim", {}) == 0

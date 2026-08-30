@@ -448,6 +448,43 @@ def farmland_lots(storage: Storage, only_active: bool = True) -> list[Lot]:
     return lots
 
 
+def backfill_settlement_codes(config: Config, http: HttpClient, storage: Storage) -> int:
+    """Достаёт коды населённых пунктов из поиска рм"и для уже накопленных лотов.
+
+    Код нужен для сравнения участков, а колонка появилась позже базы и после
+    миграции пуста. Детали тендеров ради неё перезабирать не нужно: код лежит
+    в ответе поиска, и это один запрос на весь архив.
+
+    Отказ портала не фатален — вернётся ноль, и рейтинг просто останется без
+    оценок до следующего раза.
+    """
+    from .extract import as_list, to_int
+    from .sources.rmi_michrazim import SEARCH_URL, SITE_HEADERS
+
+    try:
+        data = http.post_json(
+            SEARCH_URL,
+            json={"ActiveQuickSearch": False, "ActiveMichraz": False},
+            headers=SITE_HEADERS,
+        )
+    except Exception as exc:  # noqa: BLE001 - рейтинг важнее одного запроса
+        log.warning("Коды населённых пунктов недоступны: %s", exc)
+        return 0
+
+    codes: dict[str, int] = {}
+    for tender in as_list(data):
+        if not isinstance(tender, dict):
+            continue
+        tender_id = to_int(tender.get("MichrazID") or tender.get("MichrazId"))
+        code = to_int(tender.get("KodYeshuv") or tender.get("KodYishuv"))
+        if tender_id is not None and code is not None:
+            codes[str(tender_id)] = code
+
+    updated = storage.set_settlement_codes("rmi_michrazim", codes)
+    log.info("Коды населённых пунктов: проставлено %d лотам", updated)
+    return updated
+
+
 def top_lots(
     config: Config,
     http: HttpClient,

@@ -267,6 +267,25 @@ class Storage:
     def set_land_use(self, uid: str, land_use: str) -> None:
         self.conn.execute("UPDATE lots SET land_use = ? WHERE uid = ?", (land_use, uid))
 
+    def set_settlement_codes(self, source: str, codes: dict[str, int]) -> int:
+        """Проставляет код населённого пункта лотам по номеру тендера.
+
+        Колонка появилась после того, как база накопилась, и миграция добавила
+        её пустой. Перезабирать ради неё весь архив закрытых торгов — шесть
+        часов запросов, тогда как код лежит в ответе поиска: один запрос на все
+        десять тысяч тендеров. Обновляются только пустые значения, чтобы шаг
+        можно было повторять без вреда.
+        """
+        if not codes:
+            return 0
+        cur = self.conn.executemany(
+            "UPDATE lots SET settlement_code = ? "
+            "WHERE source = ? AND tender_id = ? AND settlement_code IS NULL",
+            [(code, source, tender_id) for tender_id, code in codes.items()],
+        )
+        self.conn.commit()
+        return cur.rowcount or 0
+
     def clear_land_use_on_built_land(self) -> int:
         """Снимает назначение с площадок под снос и расселение.
 

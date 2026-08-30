@@ -424,7 +424,7 @@ def cmd_top(args: argparse.Namespace) -> int:
     и рейтинг по ним сравнивал бы лоты по разным меркам.
     """
     from .notify import TelegramError, TelegramNotifier
-    from .pipeline import build_http, explain_top, top_lots
+    from .pipeline import backfill_settlement_codes, build_http, explain_top, top_lots
 
     config = load_config(args.config)
     # Рейтинг строится на оценке, поэтому она нужна независимо от конфига:
@@ -436,6 +436,9 @@ def cmd_top(args: argparse.Namespace) -> int:
     http = build_http(config)
     with open_storage(config, args.db) as storage:
         backfill_land_use(storage)
+        # Код населённого пункта — то, по чему участки сравниваются между
+        # собой. У лотов, попавших в базу до появления колонки, он пуст.
+        backfill_settlement_codes(config, http, storage)
         lots = top_lots(config, http, storage, limit=args.limit, only_active=not args.all)
         breakdown = explain_top(config, http, storage) if args.why else {}
 
