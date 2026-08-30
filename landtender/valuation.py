@@ -32,6 +32,7 @@ import logging
 import math
 from dataclasses import dataclass
 from datetime import date
+from typing import Any
 
 from .landuse import AGRICULTURE
 from .macro import IndexPoint, index_factor
@@ -76,6 +77,9 @@ class Comparable:
 
     source_id: str
     settlement: str | None
+    #: Код населённого пункта: надёжнее названия, у которого десяток написаний,
+    #: и приходит от портала там, где названия нет вовсе.
+    settlement_code: int | None
     area_sqm: float
     price_nis: float
     #: Цена за м² после поправки на индекс.
@@ -155,6 +159,7 @@ def collect_comparables(
             Comparable(
                 source_id=lot.source_id,
                 settlement=lot.settlement,
+                settlement_code=lot.settlement_code,
                 area_sqm=lot.area_sqm,
                 price_nis=adjusted,
                 price_per_sqm=adjusted / lot.area_sqm,
@@ -259,7 +264,7 @@ def explain_estimates(
         if not lot.area_sqm or lot.area_sqm < MIN_CREDIBLE_AREA_SQM:
             counts["площадь-заглушка"] += 1
             continue
-        if not lot.settlement:
+        if _place_key(lot.settlement_code, lot.settlement) is None:
             counts["город не указан"] += 1
             continue
         pool = nearby(comparables, lot)
@@ -276,25 +281,36 @@ def explain_estimates(
 
 
 def nearby(comparables: list[Comparable], lot: Lot) -> list[Comparable]:
-    """Сделки, сравнимые с этим лотом: тот же населённый пункт, и только он.
+    """Сделки из того же населённого пункта, и только оттуда.
 
-    Раньше при нехватке сделок по городу выборка расширялась до всех сделок
-    того же назначения по стране. На настоящей базе это и оказалось главным
-    источником бессмыслицы: участок сравнивался с участком в другом конце
-    страны, модель объясняла разброс на треть, а интервал оценки выходил в
-    полсотни раз. Цена земли меняется на границе муниципалитета скачком, и
-    «широкая выборка» здесь не компромисс, а подмена предмета.
+    Сравнение идёт по коду ЦСБ, а название — запасной путь. Портал присылает
+    код почти всегда, а имя далеко не всегда: из 817 действующих лотов имя не
+    было известно ни у одного, и требование сравнивать «по городу» отсекало
+    поголовно всех. Коду это безразлично, и он же не путается в написаниях.
 
-    Лучше отказаться от оценки, чем выдать оценку по чужому городу.
+    Расширять выборку на другие города нельзя: цена земли меняется на границе
+    муниципалитета скачком. Лучше отказаться от оценки, чем выдать оценку по
+    чужому городу.
     """
-    if not lot.settlement:
+    key = _place_key(lot.settlement_code, lot.settlement)
+    if key is None:
         return []
     # Сделка не может быть сравнимой сама себе. Закрытый тендер попадает и в
     # выборку, и на оценку: без этого он объяснял бы собственную цену.
     return [
         c for c in comparables
-        if c.settlement == lot.settlement and c.source_id != lot.source_id
+        if _place_key(c.settlement_code, c.settlement) == key
+        and c.source_id != lot.source_id
     ]
+
+
+def _place_key(code: int | None, name: str | None) -> tuple[str, Any] | None:
+    """Признак «тот же населённый пункт»: код, иначе название."""
+    if code is not None:
+        return ("code", code)
+    if name:
+        return ("name", name)
+    return None
 
 
 def estimate(lot: Lot, comparables: list[Comparable]) -> Valuation | None:

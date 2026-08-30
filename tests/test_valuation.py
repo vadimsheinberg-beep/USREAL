@@ -366,3 +366,47 @@ class TestExplainEstimates:
         lots = [deal(str(i), area=1000.0) for i in range(4)]
         counts = explain_estimates(lots, pool(30))
         assert sum(v for k, v in counts.items() if k != "всего") == counts["всего"]
+
+
+class TestPlaceByCode:
+    """Сравнение по коду населённого пункта, а не по названию.
+
+    Разбор на настоящей базе дал однозначный ответ: из 817 действующих лотов
+    название города не было известно ни у одного, и требование «тот же город»
+    отсекало поголовно всех. Портал при этом присылает код ЦСБ почти всегда.
+    Коду безразличны написания, которых у израильских городов по десятку.
+    """
+
+    def coded(self, source_id, code, **kw):
+        return deal(source_id, city=None, settlement_code=code, **kw)
+
+    def test_same_code_is_the_same_place(self):
+        comps = collect_comparables([self.coded(str(i), 4000) for i in range(5)])
+        chosen = nearby(comps, self.coded("цель", 4000))
+        assert len(chosen) == 5
+
+    def test_different_codes_never_mix(self):
+        comps = collect_comparables(
+            [self.coded(str(i), 4000) for i in range(5)]
+            + [self.coded(f"д{i}", 9000) for i in range(5)]
+        )
+        chosen = nearby(comps, self.coded("цель", 9000))
+        assert len(chosen) == 5
+        assert all(c.settlement_code == 9000 for c in chosen)
+
+    def test_the_code_wins_over_the_name(self):
+        """У одного города бывает десяток написаний; код — один."""
+        comps = collect_comparables([
+            deal("1", city="חיפה", settlement_code=4000),
+            deal("2", city="Хайфа", settlement_code=4000),
+        ])
+        chosen = nearby(comps, deal("цель", city="Haifa", settlement_code=4000))
+        assert len(chosen) == 2
+
+    def test_the_name_still_works_without_a_code(self):
+        comps = collect_comparables([deal(str(i), city="עכו") for i in range(4)])
+        assert len(nearby(comps, deal("цель", city="עכו"))) == 4
+
+    def test_neither_code_nor_name_means_no_comparables(self):
+        comps = collect_comparables([self.coded(str(i), 4000) for i in range(5)])
+        assert nearby(comps, deal("цель", city=None)) == []

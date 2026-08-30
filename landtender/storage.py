@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS lots (
     tender_name            TEXT,
     url                    TEXT,
     settlement             TEXT,
+    settlement_code        INTEGER,
     neighborhood           TEXT,
     region                 TEXT,
     gush                   TEXT,
@@ -120,7 +121,7 @@ TRACKED_CHANGES = ("price_usd", "price_nis", "units", "status", "closing_date", 
 
 _LOT_COLUMNS = (
     "uid", "source", "source_id", "tender_id", "tender_name", "url",
-    "settlement", "neighborhood", "region", "gush", "chelka",
+    "settlement", "settlement_code", "neighborhood", "region", "gush", "chelka",
     "purpose", "tender_type", "status", "area_sqm", "built_area_sqm",
     "renewal_kind", "has_structure", "land_use",
     "plan_signal", "plan_number", "plan_url", "zoning",

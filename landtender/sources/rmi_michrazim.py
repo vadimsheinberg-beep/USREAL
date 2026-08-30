@@ -288,6 +288,9 @@ def _tender_meta(tender: dict[str, Any], codes: dict[str, dict[int, str]]) -> di
         "tender_id": tender_id,
         "tender_name": clean_text(pick(tender, TENDER_NAME_KEYS)),
         "settlement": clean_text(pick(tender, SETTLEMENT_KEYS)),
+        # Код населённого пункта портал присылает почти всегда, название —
+        # далеко не всегда. Для сравнения участков достаточно кода.
+        "settlement_code": to_int(pick(tender, ("KodYeshuv", "KodYishuv"))),
         "neighborhood": clean_text(pick(tender, NEIGHBORHOOD_KEYS)),
         # Для мерхава таблицы кодов нет — числовой код показывать бессмысленно.
         "region": _decode({}, pick(tender, REGION_KEYS)),
@@ -318,6 +321,7 @@ def _tender_level_lot(meta: dict[str, Any], raw: dict[str, Any]) -> Lot:
         tender_name=meta["tender_name"],
         url=meta["url"],
         settlement=meta["settlement"],
+        settlement_code=meta.get("settlement_code"),
         neighborhood=meta["neighborhood"],
         region=meta["region"],
         purpose=meta["purpose"],
@@ -500,6 +504,7 @@ def _lots_from_details(
             tender_name=meta["tender_name"],
             url=meta["url"],
             settlement=clean_text(pick(node, SETTLEMENT_KEYS)) or meta["settlement"],
+            settlement_code=meta.get("settlement_code"),
             neighborhood=clean_text(pick(node, NEIGHBORHOOD_KEYS)) or meta["neighborhood"],
             region=meta["region"],
             gush=gush,

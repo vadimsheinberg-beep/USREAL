@@ -547,3 +547,26 @@ class TestTimeBudget:
         source = make_source(ROUTES, options={"details_time_budget_sec": 600})
         detail_calls_before = len(list(source.fetch()))
         assert detail_calls_before == len(list(make_source(ROUTES).fetch()))
+
+
+class TestSettlementCode:
+    """Код населённого пункта портал присылает там, где имени нет."""
+
+    def test_the_code_reaches_the_lot(self):
+        lots = list(make_source(ROUTES).fetch())
+        search = load_fixture("rmi_search.json")
+        expected = {t["MichrazID"]: t.get("KodYeshuv") for t in search}
+        for lot in lots:
+            if lot.tender_id:
+                assert lot.settlement_code == expected.get(int(lot.tender_id))
+
+    def test_the_code_survives_a_missing_name(self):
+        """Ровно этот случай и оставлял 817 лотов без единой сравнимой сделки."""
+        routes = dict(ROUTES, **{
+            "SearchApi/Search": [
+                {"MichrazID": 20250999, "MichrazName": "999/2025", "KodYeshuv": 4000}
+            ],
+        })
+        lot = list(make_source(routes).fetch())[0]
+        assert lot.settlement is None
+        assert lot.settlement_code == 4000
