@@ -13,6 +13,7 @@ from .config import Config
 from .http import HttpClient
 from .models import Lot, RunResult, SourceReport
 from .money import FxProvider, FxRate, enrich_lot, utcnow_iso
+from .landuse import RESIDENTIAL
 from .places import matches as place_matches
 from .sources import SOURCES_BY_NAME, Source, SourceContext
 from .storage import Storage
@@ -739,8 +740,20 @@ def select_city(
     counts["город совпал"] = len(lots)
 
     if purpose:
-        lots = [lot for lot in lots if purpose in (lot.purpose or "")]
-        counts["назначение совпало"] = len(lots)
+        # Назначение портал заполняет далеко не всегда: из 213 иерусалимских
+        # лотов текст «מגורים» не стоял ни у одного, и срез по городу
+        # схлопывался в ноль. Отсутствие сведения — не сведение об обратном,
+        # поэтому лот с пустым назначением остаётся, если разбор назначения
+        # не отнёс его к другой категории (сельхоз, промышленность и т.п.).
+        # Отбрасываются только лоты с известным и другим назначением.
+        matched = [lot for lot in lots if purpose in (lot.purpose or "")]
+        unknown = [
+            lot for lot in lots
+            if not (lot.purpose or "") and lot.land_use in (None, RESIDENTIAL)
+        ]
+        counts["назначение совпало"] = len(matched)
+        counts["назначение не указано"] = len(unknown)
+        lots = matched + unknown
 
     priceless = [lot for lot in lots if not lot.price_usd]
     lots = [lot for lot in lots if lot.price_usd]

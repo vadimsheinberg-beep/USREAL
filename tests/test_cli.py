@@ -268,6 +268,11 @@ class JerusalemSource(Source):
             Lot(source="fake", source_id="2", tender_name="хайфский",
                 settlement="חיפה", purpose="מגורים", price_nis=2_000_000.0,
                 area_sqm=500.0, closing_date="2099-01-01"),
+            # Портал заполняет назначение далеко не всегда — и таких лотов в
+            # Иерусалиме оказались все 213 из 213.
+            Lot(source="fake", source_id="3", tender_name="безымянный",
+                settlement="ירושלים", price_nis=900_000.0,
+                area_sqm=300.0, closing_date="2099-01-01"),
         ]
 
 
@@ -437,10 +442,29 @@ class TestCityCommand:
         )
         # Иерусалимский лот в базе есть, цена у него есть, а под порог в
         # доллар он не проходит — и воронка называет именно этот шаг.
-        assert counts["город совпал"] == 1
-        assert counts["с объявленной ценой"] == 1
+        assert counts["город совпал"] == 2
+        assert counts["с объявленной ценой"] == 2
         assert counts["под порогом цены"] == 0
         assert "Отбор:" in out
+
+    def test_lots_without_a_stated_purpose_stay_in(self, config_file, capsys):
+        """Молчание портала о назначении — не ответ «не жильё».
+
+        Из 213 иерусалимских лотов текст «מגורים» не стоял ни у одного, и
+        срез схлопывался в ноль при живых лотах в базе.
+        """
+        self.fill(config_file)
+        capsys.readouterr()
+        cli.main([
+            "--config", str(config_file), "city",
+            "--city", "Иерусалим", "--purpose", "מסחר",
+        ])
+        out = capsys.readouterr().out
+        assert "назначение совпало" in out
+        # Лот с пустым назначением остался, лот с чужим назначением ушёл.
+        assert "безымянный" in out
+        assert "иерусалимский" not in out
+        assert "назначение портал не указал" in out
 
     def test_the_indicators_are_recomputed(self, config_file, capsys, monkeypatch):
         """В строках среза стоят числа, а не прочерки.
@@ -461,8 +485,11 @@ class TestCityCommand:
             line for line in capsys.readouterr().out.splitlines()
             if "иерусалимский" in line
         ][0]
-        # Оценка — восьмая колонка TABLE_COLUMNS, считая от названия тендера.
-        assert row.split(", ")[7] != "—"
+        from landtender.report import TABLE_COLUMNS
+
+        # Считаем колонку по имени, а не по номеру: номер уже уезжал, когда
+        # в таблицу добавился вид цены.
+        assert row.split(", ")[TABLE_COLUMNS.index("оценка ₪")] != "—"
 
 
 class TestEnrichCommand:

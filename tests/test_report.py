@@ -564,18 +564,33 @@ class TestPriceVerdict:
         text = "\n".join(build_telegram_digest(
             result(new_lots=lots), 1_000_000, max_per_tier=99, split_by_threshold=False
         ))
-        return [ln for ln in text.split("\n") if "хвост" in ln or "к оценке" in ln]
+        # Вердикт уезжает на вторую строку карточки, поэтому ловим и её.
+        return [ln for ln in text.split("\n") if "хвост" in ln or "оценк" in ln]
 
     def test_bargain_shows_in_the_compact_line(self):
-        assert any("🟢 −45% к оценке" in ln for ln in self.compact(price_nis=5_500_000.0))
+        lines = self.compact(price_nis=5_500_000.0, price_kind="final")
+        assert any("🟢 −45% к оценке" in ln for ln in lines)
 
     def test_overpriced_shows_in_the_compact_line(self):
-        assert any("🔴 +50% к оценке" in ln for ln in self.compact(price_nis=15_000_000.0))
+        lines = self.compact(price_nis=15_000_000.0, price_kind="final")
+        assert any("🔴 +50% к оценке" in ln for ln in lines)
 
     def test_price_near_the_estimate_says_nothing(self):
         """Строка «примерно по оценке» стояла бы почти всюду и стала бы фоном."""
-        lines = self.compact(price_nis=9_500_000.0)
+        lines = self.compact(price_nis=9_500_000.0, price_kind="final")
         assert not any("к оценке" in ln for ln in lines)
+
+    def test_a_reserve_price_is_not_called_a_bargain(self):
+        """מחיר מינימום ниже рыночной оценки по построению, а не по удаче.
+
+        Оценка строится на суммах, которые победители реально заплатили, а
+        цена действующего тендера — это порог, ниже которого заявку не
+        примут. В первом полном прогоне 🟢 получили 127 лотов из 159
+        оценённых: витрина выдавала устройство торгов за находки.
+        """
+        lines = self.compact(price_nis=5_500_000.0, price_kind="min")
+        assert any("старт на 45% ниже оценки" in ln for ln in lines)
+        assert not any("🟢" in ln for ln in lines)
 
 
 class TestFmtNisShort:
@@ -621,9 +636,14 @@ class TestTopDigest:
         assert "<b>3.</b>" in text and "<b>4.</b>" not in text
 
     def test_header_counts_bargains(self):
-        cheap = lot(source_id="дешёвый", score_total=90.0,
+        cheap = lot(source_id="дешёвый", score_total=90.0, price_kind="final",
                     price_nis=5_000_000.0, estimate_nis=10_000_000.0)
         assert "🟢 Дешевле оценки более чем на 20%: 1" in self.text([cheap])
+
+    def test_reserve_prices_do_not_inflate_the_bargain_count(self):
+        cheap = lot(source_id="стартовый", score_total=90.0, price_kind="min",
+                    price_nis=5_000_000.0, estimate_nis=10_000_000.0)
+        assert "Дешевле оценки" not in self.text([cheap])
 
     def test_header_omits_bargains_when_there_are_none(self):
         assert "Дешевле оценки" not in self.text(self.ranked(3))
@@ -720,3 +740,45 @@ class TestCityDigest:
         from landtender.report import TABLE_COLUMNS
 
         assert ", ".join(TABLE_COLUMNS) in self.text([self.resid()])
+
+
+class TestExportColumns:
+    """CSV — то, по чему считают, и он обязан нести всё, что видно в сообщении."""
+
+    def test_it_carries_every_indicator_shown_in_the_message(self, tmp_path):
+        from landtender.report import EXPORT_FIELDS, export_csv
+        from landtender.models import Lot
+
+        lot = Lot(source="rmi", source_id="1", settlement="חיפה", settlement_code=4000,
+                  area_sqm=500.0, price_nis=1_000_000.0)
+        lot.price_per_sqm_nis = 2000.0
+        path = export_csv([lot], tmp_path / "out.csv")
+        header = path.read_text("utf-8-sig").splitlines()[0]
+        # Цена за метр стоит в строке сообщения — значит, и в выгрузке.
+        assert "price_per_sqm_nis" in header
+        # Код населённого пункта — то, по чему участки сравниваются между
+        # собой; без него из CSV нельзя воспроизвести подбор сравнимых.
+        assert "settlement_code" in header
+        assert "estimate_nis" in EXPORT_FIELDS
+
+
+class TestReserveStartersInTheFullExport:
+    """Полная выгрузка называет старт стартом, а не скидкой."""
+
+    def make(self, kind):
+        return lot(source_id="1", price_nis=5_000_000.0,
+                   estimate_nis=10_000_000.0, price_kind=kind)
+
+    def test_reserve_prices_are_counted_separately(self):
+        from landtender.report import build_all_digest
+
+        text = "\n".join(build_all_digest([self.make("min")]))
+        assert "Стартуют ниже оценки: 1" in text
+        assert "Дешевле оценки" not in text
+
+    def test_real_deals_still_count_as_bargains(self):
+        from landtender.report import build_all_digest
+
+        text = "\n".join(build_all_digest([self.make("final")]))
+        assert "🟢 Дешевле оценки более чем на 20%: 1" in text
+        assert "Стартуют ниже оценки" not in text

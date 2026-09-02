@@ -57,16 +57,43 @@ def fmt_nis_short(value: float | None) -> str:
 BARGAIN_RATIO = 0.8
 OVERPRICED_RATIO = 1.25
 
+#: Что именно означает число в колонке цены. Разница принципиальная: у
+#: действующего тендера рм"и это מחיר מינימום — цена, ниже которой заявку не
+#: примут, а не цена, по которой участок уйдёт. Оценка же построена на
+#: ``SchumZchiya`` — суммах, которые победители реально заплатили. Сравнивая
+#: одно с другим, «скидку к рынку» показывает почти каждый действующий лот:
+#: в первом полном прогоне 🟢 получили 127 лотов из 159 оценённых. Это не
+#: находки, а определение резервной цены.
+PRICE_KIND_TITLES = {
+    "final": "сделка",
+    "min": "мин.",
+    "appraisal": "шумá",
+    "asking": "запрос",
+}
+
+#: Виды цены, которые нельзя сравнивать с оценкой как рыночную.
+RESERVE_PRICE_KINDS = frozenset({"min", "appraisal"})
+
 
 def _price_verdict(lot: Lot) -> str:
     """«Дёшево» или «дорого» относительно оценки — одной короткой фразой.
 
     Это главный вывод по лоту: цена сама по себе не говорит ничего, пока не
-    с чем сравнить. Поэтому вердикт есть в обеих формах карточки.
+    с чем сравнить. Но сравнивать нужно сравнимое: минимальная цена ниже
+    рыночной оценки по построению, и молча называть это скидкой значит
+    выдавать устройство торгов за находку.
     """
     if not (lot.estimate_nis and lot.price_nis):
         return ""
     ratio = lot.price_nis / lot.estimate_nis
+    if lot.price_kind in RESERVE_PRICE_KINDS:
+        # Число всё равно полезно — оно показывает, с какого уровня стартуют
+        # торги, — но подаётся как старт, а не как выигрыш.
+        if ratio <= BARGAIN_RATIO:
+            return f"старт на {(1 - ratio) * 100:.0f}% ниже оценки"
+        if ratio >= OVERPRICED_RATIO:
+            return f"🔴 старт на {(ratio - 1) * 100:.0f}% выше оценки"
+        return ""
     if ratio <= BARGAIN_RATIO:
         return f"🟢 −{(1 - ratio) * 100:.0f}% к оценке"
     if ratio >= OVERPRICED_RATIO:
@@ -417,6 +444,7 @@ TABLE_COLUMNS = (
     "город",
     "назначение",
     "цена ₪",
+    "вид цены",
     "цена ₪/м²",
     "площадь м²",
     "единиц",
@@ -452,6 +480,7 @@ def _table_row(lot: Lot) -> list[str]:
         escape(lot.settlement or "—"),
         escape(lot.purpose or "—"),
         _num(lot.price_nis),
+        PRICE_KIND_TITLES.get(lot.price_kind or "", "—"),
         _num(lot.price_per_sqm_nis),
         _num(lot.area_sqm),
         fmt_units(lot),
@@ -542,6 +571,16 @@ def build_farmland_digest(
     return blocks
 
 
+def _reserve_below_estimate(lots: Sequence[Lot]) -> int:
+    """Сколько лотов стартуют ниже оценки. Не находки, но и не пустяк.
+
+    Это уровень, с которого пойдут торги, — читателю он нужен, но называть
+    его скидкой к рынку нельзя: минимальная цена ниже рыночной по правилам
+    торгов, а не по везению.
+    """
+    return sum(1 for lot in lots if _price_verdict(lot).startswith("старт"))
+
+
 def _funnel_lines(counts: dict[str, int] | None) -> list[str]:
     """Разбивка отсева одной строкой — сколько лотов дожило до каждого шага."""
     if not counts:
@@ -572,6 +611,12 @@ def build_city_digest(
     if max_usd is not None:
         header.append(f"Порог цены: до {fmt_usd(max_usd)}")
     header.append("Это участки земельных торгов, а не квартиры вторичного рынка.")
+    unstated = (counts or {}).get("назначение не указано", 0)
+    if unstated:
+        header.append(
+            f"У {unstated} из них назначение портал не указал — они оставлены в срезе, "
+            "потому что молчание источника не означает «не жильё»."
+        )
 
     if not shown:
         # Пустой срез обязан объяснить себя: «ничего не подошло» одинаково
@@ -655,6 +700,12 @@ def build_all_digest(
         header.append(f"Сумма объявленных цен: {fmt_usd(sum(lot.price_usd or 0 for lot in priced))}")
     if bargains:
         header.append(f"🟢 Дешевле оценки более чем на 20%: {len(bargains)}")
+    starters = _reserve_below_estimate(lots)
+    if starters:
+        header.append(
+            f"Стартуют ниже оценки: {starters} — это минимальная цена торгов, "
+            "а не рыночная: сравнивать её с оценкой как скидку нельзя."
+        )
     header.append("Порядок: сперва с баллом и ценой, затем остальные.")
 
     shown = list(lots if max_lots is None else lots[:max_lots])
@@ -778,7 +829,7 @@ def build_console_report(
 # ---------------------------------------------------------------- выгрузки --
 
 EXPORT_FIELDS = (
-    "uid", "source", "tender_id", "tender_name", "settlement", "neighborhood",
+    "uid", "source", "tender_id", "tender_name", "settlement", "settlement_code", "neighborhood",
     "gush", "chelka", "purpose", "status", "area_sqm", "built_area_sqm", "renewal_kind",
     "has_structure", "land_use", "zoning",
     "plan_signal", "plan_number", "plan_url",
@@ -788,7 +839,7 @@ EXPORT_FIELDS = (
     "score_market", "score_timing", "score_coverage",
     "max_bid_nis", "bid_headroom_pct", "roi_at_min",
     "units", "units_basis",
-    "price_nis", "price_kind", "development_costs_nis", "guarantee_nis", "price_usd", "price_per_unit_usd", "price_per_sqm_usd",
+    "price_nis", "price_kind", "price_per_sqm_nis", "development_costs_nis", "guarantee_nis", "price_usd", "price_per_unit_usd", "price_per_sqm_usd",
     "tier", "published_date", "opening_date", "closing_date", "url",
 )
 
