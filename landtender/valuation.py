@@ -280,6 +280,33 @@ def explain_estimates(
     return counts
 
 
+def gaps_by_source(lots: list[Lot]) -> dict[str, dict[str, int]]:
+    """Чего не хватает лотам — в разрезе источников.
+
+    Общие счётчики говорят, что оценки нет у полутора тысяч лотов, но не
+    говорят, у чьих. А это разные починки: у тендера рм"и без площади её
+    можно добрать из кадастра, а проект городского обновления площадь
+    участка не публикует вовсе, и добирать там нечего. Пока разрез не
+    посчитан, любой ответ на «почему так мало оценок» — догадка.
+    """
+    out: dict[str, dict[str, int]] = {}
+    for lot in lots:
+        row = out.setdefault(
+            lot.source,
+            {"всего": 0, "без площади": 0, "без города": 0, "без цены": 0, "без гуш/хелка": 0},
+        )
+        row["всего"] += 1
+        if not lot.area_sqm or lot.area_sqm < MIN_CREDIBLE_AREA_SQM:
+            row["без площади"] += 1
+        if _place_key(lot.settlement_code, lot.settlement) is None:
+            row["без города"] += 1
+        if not lot.price_nis:
+            row["без цены"] += 1
+        if not (lot.gush and lot.chelka):
+            row["без гуш/хелка"] += 1
+    return dict(sorted(out.items(), key=lambda item: -item[1]["всего"]))
+
+
 def nearby(comparables: list[Comparable], lot: Lot) -> list[Comparable]:
     """Сделки из того же населённого пункта, и только оттуда.
 

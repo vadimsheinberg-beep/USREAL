@@ -27,10 +27,15 @@ class TestDefaults:
     def test_threshold_defaults_to_one_million(self):
         assert Config().threshold_usd == 1_000_000.0
 
-    def test_all_sources_enabled_by_default(self):
+    def test_government_sources_are_enabled_by_default(self):
         config = Config()
         assert config.source_enabled("rmi_michrazim") is True
-        assert config.source_enabled("yad2") is True
+        assert config.source_enabled("gov_mr") is True
+        assert config.source_enabled("data_gov_il") is True
+
+    def test_yad2_is_off_until_its_api_answers_again(self):
+        """Мёртвый источник выключен, а не оставлен ронять отчёт каждый день."""
+        assert Config().source_enabled("yad2") is False
 
     def test_unknown_source_is_disabled(self):
         assert Config().source_enabled("несуществующий") is False

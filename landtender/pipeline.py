@@ -441,11 +441,7 @@ def farmland_lots(storage: Storage, only_active: bool = True) -> list[Lot]:
     """
     from .landuse import AGRICULTURE
 
-    today = date.today().isoformat()
-    lots = [lot for lot in stored_lots(storage) if lot.land_use == AGRICULTURE]
-    if only_active:
-        lots = [lot for lot in lots if not is_expired(lot, today)]
-    return lots
+    return [lot for lot in active_lots(storage, only_active) if lot.land_use == AGRICULTURE]
 
 
 def enrich_stored_lots(
@@ -557,6 +553,79 @@ def backfill_settlement_codes(config: Config, http: HttpClient, storage: Storage
     return updated
 
 
+def active_lots(storage: Storage, only_active: bool = True) -> list[Lot]:
+    """Лоты базы, годные к показу: без тендеров-заглушек и без просроченных.
+
+    Один и тот же отбор нужен всем витринам — топу, срезу по городу,
+    сельхозземле и полной выгрузке. Пока он был скопирован в каждую из них,
+    витрины незаметно расходились: топ пересчитывал показатели, а срез по
+    городу показывал прочерки, потому что читал те же лоты, но иначе.
+    """
+    today = date.today().isoformat()
+    lots = collapse_placeholders(stored_lots(storage))
+    if only_active:
+        lots = [lot for lot in lots if not is_expired(lot, today)]
+    return lots
+
+
+def evaluate_lots(
+    config: Config, http: HttpClient, storage: Storage, lots: Sequence[Lot]
+) -> list[Lot]:
+    """Пересчитывает оценку, показатели и предельную ставку в памяти.
+
+    Числа, лежащие в базе, посчитаны в день загрузки лота, когда сравнимых
+    сделок было на порядок меньше. Показывать их рядом с сегодняшними значило
+    бы мерить лоты разными мерками, поэтому перед любой выгрузкой показатели
+    считаются заново — по одной и той же базе сравнимых, для всех сразу.
+    """
+    # Оценка опирается на чужой ряд индексов ЦСБ. Когда он недоступен,
+    # выгрузка обязана выйти — с прочерками на месте оценки и с внятной
+    # записью в журнале, — а не упасть целиком: витрина без одного показателя
+    # всё ещё витрина, а витрины нет вовсе.
+    try:
+        comparables = build_appraiser(config, http, storage) or []
+    except Exception as exc:  # noqa: BLE001 - выгрузка важнее одного показателя
+        log.warning("Оценка недоступна, показатели цены будут пустыми: %s", exc)
+        comparables = []
+    bidding_options = config.section("bidding")
+    for lot in lots:
+        if comparables:
+            _apply_estimate(lot, comparables)
+        _apply_scoring(lot, bidding_options)
+    return list(lots)
+
+
+def rank_key(lot: Lot) -> tuple[int, float, float, float]:
+    """Порядок показа: сперва лоты с ценой и баллом, потом всё остальное.
+
+    Сортировать одним лишь баллом здесь нельзя, и это не мелочь: балл
+    складывается из показателей, часть которых считается без цены — срок
+    подачи, плотность. Лот, о котором известно только то, что заявки
+    принимают до декабря, набирает их полностью и обходит участок с честной
+    оценкой. В рейтинге такие лоты просто не участвуют, но полная выгрузка
+    обязана показать и их — значит, разделять надо порядком, а не отсевом.
+    """
+    known = 0 if (lot.price_nis and lot.score_price is not None) else 1
+    return (known, -(lot.score_total or -1.0), -(lot.price_usd or -1.0), -(lot.area_sqm or -1.0))
+
+
+def all_lots(
+    config: Config,
+    http: HttpClient,
+    storage: Storage,
+    only_active: bool = True,
+) -> list[Lot]:
+    """Все предложения базы со всеми показателями — полная дневная выгрузка.
+
+    В отличие от топа здесь ничего не отсеивается: лот без цены или без
+    оценки остаётся в списке с прочерками на месте неизвестного. Отсутствие
+    числа — это сведение о лоте, а не причина его спрятать.
+    """
+    lots = evaluate_lots(config, http, storage, active_lots(storage, only_active))
+    lots.sort(key=rank_key)
+    return lots
+
+
 def top_lots(
     config: Config,
     http: HttpClient,
@@ -569,27 +638,14 @@ def top_lots(
     Балл и оценка, лежащие в базе, посчитаны в день, когда лот попал в неё, —
     а база сравнимых сделок с тех пор выросла с десяти записей до пятнадцати
     тысяч. Ранжировать по сохранённым числам значило бы ставить наверх лоты,
-    которым просто повезло со днём загрузки. Поэтому оценка, показатели и
-    ставка считаются заново, в памяти: сети это не требует, а рейтинг
-    получается по одной мерке для всех.
+    которым просто повезло со днём загрузки.
 
     Лоты без общего балла в топ не идут: место в рейтинге без основания —
     это не «десятое место», это отсутствие ответа. Без цены и без оценки —
     тоже: рейтинг предложений отвечает на вопрос «что брать и почём», а на
     него нельзя ответить, не сравнив цену с рынком.
     """
-    today = date.today().isoformat()
-    lots = collapse_placeholders(stored_lots(storage))
-    if only_active:
-        lots = [lot for lot in lots if not is_expired(lot, today)]
-
-    comparables = build_appraiser(config, http, storage) or []
-    bidding_options = config.section("bidding")
-
-    for lot in lots:
-        if comparables:
-            _apply_estimate(lot, comparables)
-        _apply_scoring(lot, bidding_options)
+    lots = evaluate_lots(config, http, storage, active_lots(storage, only_active))
 
     # Рейтинг предложений без цены бессмыслен: у такого лота нет ни скидки к
     # оценке, ни доходности, ни предельной ставки — сравнивать нечего. В
@@ -646,11 +702,55 @@ def explain_top(
     """
     from .valuation import explain_estimates
 
-    today = date.today().isoformat()
-    lots = collapse_placeholders(stored_lots(storage))
-    if only_active:
-        lots = [lot for lot in lots if not is_expired(lot, today)]
+    lots = active_lots(storage, only_active)
     return explain_estimates(lots, build_appraiser(config, http, storage) or [])
+
+
+def select_city(
+    storage: Storage,
+    city: str,
+    purpose: str | None = None,
+    max_usd: float | None = None,
+    only_active: bool = True,
+) -> tuple[list[Lot], dict[str, int]]:
+    """Лоты одного города плюс счётчики отсева на каждом шаге.
+
+    Счётчики здесь не диагностика на чёрный день, а часть ответа. Пустой срез
+    по Иерусалиму может означать четыре разных вещи: город не встречается в
+    базе, все его лоты просрочены, ни у одного нет цены или все дороже
+    порога. Без разбивки они неотличимы, и на пустое сообщение нечего
+    возразить — а первый же рабочий прогон дал ровно ноль лотов.
+
+    Город сверяется через ``places``: у израильских городов десяток
+    написаний, и «Иерусалим», «ירושלים» и «Jerusalem» обязаны означать одно.
+    Назначение сверяется вхождением строки — портал пишет его свободным
+    текстом («מגורים», «מגורים ומסחר»), и точное равенство отсекало бы лишнее.
+    """
+    # Название приводится к каноническому до сравнения: matches() сверяет
+    # строки как есть, а «Иерусалим» в ивритском поле не встретится никогда.
+    from .places import resolve as resolve_places
+
+    counts: dict[str, int] = {}
+    lots = active_lots(storage, only_active)
+    counts["активных лотов"] = len(lots)
+
+    names, _ = resolve_places([city])
+    lots = [lot for lot in lots if place_matches(lot.settlement, names or [city])]
+    counts["город совпал"] = len(lots)
+
+    if purpose:
+        lots = [lot for lot in lots if purpose in (lot.purpose or "")]
+        counts["назначение совпало"] = len(lots)
+
+    priceless = [lot for lot in lots if not lot.price_usd]
+    lots = [lot for lot in lots if lot.price_usd]
+    counts["с объявленной ценой"] = len(lots)
+    counts["без цены"] = len(priceless)
+
+    if max_usd is not None:
+        lots = [lot for lot in lots if (lot.price_usd or 0) <= max_usd]
+        counts["под порогом цены"] = len(lots)
+    return lots, counts
 
 
 def city_lots(
@@ -660,28 +760,10 @@ def city_lots(
     max_usd: float | None = None,
     only_active: bool = True,
 ) -> list[Lot]:
-    """Лоты одного города: по назначению и потолку цены.
-
-    Город сверяется через ``places``: у израильских городов десяток
-    написаний, и «Иерусалим», «ירושלים» и «Jerusalem» обязаны означать одно.
-    Назначение сверяется вхождением строки — портал пишет его свободным
-    текстом («מגורים», «מגורים ומסחר»), и точное равенство отсекало бы лишнее.
-    """
-    today = date.today().isoformat()
-    lots = collapse_placeholders(stored_lots(storage))
-    if only_active:
-        lots = [lot for lot in lots if not is_expired(lot, today)]
-
-    # Название приводится к каноническому до сравнения: matches() сверяет
-    # строки как есть, а «Иерусалим» в ивритском поле не встретится никогда.
-    from .places import resolve as resolve_places
-
-    names, _ = resolve_places([city])
-    lots = [lot for lot in lots if place_matches(lot.settlement, names or [city])]
-    if purpose:
-        lots = [lot for lot in lots if purpose in (lot.purpose or "")]
-    if max_usd is not None:
-        lots = [lot for lot in lots if lot.price_usd and lot.price_usd <= max_usd]
+    """Лоты одного города: по назначению и потолку цены."""
+    lots, _ = select_city(
+        storage, city=city, purpose=purpose, max_usd=max_usd, only_active=only_active
+    )
     return lots
 
 

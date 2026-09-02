@@ -55,7 +55,12 @@ DEFAULTS: dict[str, Any] = {
         },
         "data_gov_il": {"enabled": True, "max_rows": 2000, "queries": ["מכרזי מקרקעין", "מכרזים רשות מקרקעי ישראל"]},
         "gov_mr": {"enabled": True, "max_pages": 5},
-        "yad2": {"enabled": True, "max_pages": 5, "property_types": [39]},
+        # Выключен: внутренний API площадки отвечает 404 с конца августа
+        # 2026 года, и каждый запуск писал в отчёт [ERR] по источнику,
+        # которого больше нет. Ошибка каждый день — это не сигнал, а фон, на
+        # котором перестают замечать настоящие поломки. Разбор оставлен:
+        # появится рабочая точка входа — хватит вернуть enabled = true.
+        "yad2": {"enabled": False, "max_pages": 5, "property_types": [39]},
     },
     "telegram": {
         "enabled": True,

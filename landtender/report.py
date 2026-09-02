@@ -542,12 +542,20 @@ def build_farmland_digest(
     return blocks
 
 
+def _funnel_lines(counts: dict[str, int] | None) -> list[str]:
+    """Разбивка отсева одной строкой — сколько лотов дожило до каждого шага."""
+    if not counts:
+        return []
+    return ["Отбор: " + " → ".join(f"{name} {value}" for name, value in counts.items())]
+
+
 def build_city_digest(
     lots: Sequence[Lot],
     city: str,
     max_usd: float | None = None,
     max_lots: int = 60,
     only_active: bool = True,
+    counts: dict[str, int] | None = None,
 ) -> list[str]:
     """Срез по городу и назначению — «что есть в Иерусалиме до миллиона».
 
@@ -566,17 +574,94 @@ def build_city_digest(
     header.append("Это участки земельных торгов, а не квартиры вторичного рынка.")
 
     if not shown:
+        # Пустой срез обязан объяснить себя: «ничего не подошло» одинаково
+        # звучит и когда города нет в базе, и когда его лоты просто дороже
+        # порога, а это разные ответы и разные следующие шаги.
         header.append("Под условия ничего не подошло.")
+        header.extend(_funnel_lines(counts))
         return ["\n".join(header)]
 
     total = sum(lot.price_usd or 0 for lot in shown if lot.price_usd)
     header.append(f"Лотов: {len(shown)}" + (f" · общая цена: {fmt_usd(total)}" if total else ""))
+    header.extend(_funnel_lines(counts))
 
     blocks = ["\n".join(header)]
     lines = table_lines(shown[:max_lots])
     if len(shown) > max_lots:
         lines.append(f"…и ещё {len(shown) - max_lots}")
     blocks.append("\n".join(lines))
+    return blocks
+
+
+#: Сколько символов вмещает одно сообщение Telegram с запасом на разметку.
+#: Полная выгрузка режется по этой мерке сама, чтобы каждая её страница
+#: начиналась с названий показателей: читающий двадцатое сообщение подряд не
+#: должен возвращаться к первому, чтобы понять, что означает седьмое число.
+PAGE_CHARS = 3600
+
+
+def _paginate(legend: str, rows: Sequence[str]) -> list[str]:
+    """Режет список на страницы, каждая — со своей строкой названий колонок."""
+    pages: list[str] = []
+    current: list[str] = []
+    size = 0
+    for row in rows:
+        if current and size + len(row) + 1 > PAGE_CHARS:
+            pages.append("\n".join([legend] + current))
+            current, size = [], 0
+        current.append(row)
+        size += len(row) + 1
+    if current:
+        pages.append("\n".join([legend] + current))
+    return pages
+
+
+def build_all_digest(
+    lots: Sequence[Lot],
+    only_active: bool = True,
+    max_lots: int | None = None,
+) -> list[str]:
+    """Полная дневная выгрузка: каждое предложение строкой, все показатели.
+
+    Топ отвечает на вопрос «что брать», а эта выгрузка — на вопрос «что
+    вообще есть». Поэтому здесь не отсеивается ничего: лот без цены или без
+    оценки стоит в списке с прочерками. Прочерк — это тоже сведение: он
+    говорит, что портал цену ещё не объявил, а не что лота нет.
+
+    Заголовок называет, у скольких лотов какие показатели есть. Иначе список
+    из тысячи строк, где половина показателей прочерки, выглядит как
+    поломка — хотя это состояние источника, а не выгрузки.
+    """
+    scope = "действующие тендеры" if only_active else "вся база, включая закрытые"
+    if not lots:
+        return [
+            "📋 <b>Все предложения</b>\n"
+            f"База пуста ({scope}). Сбор: <code>landtender run</code>."
+        ]
+
+    priced = [lot for lot in lots if lot.price_nis]
+    estimated = [lot for lot in lots if lot.estimate_nis]
+    bargains = [lot for lot in lots if _price_verdict(lot).startswith("🟢")]
+    area = sum(lot.area_sqm or 0 for lot in lots)
+
+    header = [
+        "📋 <b>Все предложения — полная выгрузка</b>",
+        f"Дата: {date.today().isoformat()} · {scope}",
+        f"Лотов: {len(lots)} · с ценой: {len(priced)} · с оценкой: {len(estimated)}",
+    ]
+    if area:
+        header.append(f"Суммарная площадь: {fmt_area(area)}")
+    if priced:
+        header.append(f"Сумма объявленных цен: {fmt_usd(sum(lot.price_usd or 0 for lot in priced))}")
+    if bargains:
+        header.append(f"🟢 Дешевле оценки более чем на 20%: {len(bargains)}")
+    header.append("Порядок: сперва с баллом и ценой, затем остальные.")
+
+    shown = list(lots if max_lots is None else lots[:max_lots])
+    lines = table_lines(shown)
+    blocks = ["\n".join(header)] + _paginate(lines[0], lines[1:])
+    if max_lots is not None and len(lots) > max_lots:
+        blocks.append(f"…и ещё {len(lots) - max_lots}. Полный список — в приложенном CSV.")
     return blocks
 
 

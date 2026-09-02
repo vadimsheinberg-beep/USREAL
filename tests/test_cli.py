@@ -288,6 +288,22 @@ class ScorableSource(Source):
         ]
 
 
+class MixedSource(Source):
+    """Лот с ценой и лот без неё — полная выгрузка обязана показать оба."""
+
+    name = "fake"
+    title = "тестовый источник"
+
+    def fetch(self):
+        return [
+            Lot(source="fake", source_id="1", tender_name="оценённый",
+                settlement="חיפה", area_sqm=1_000.0, units=10,
+                price_nis=4_000_000.0, closing_date="2099-01-01"),
+            Lot(source="fake", source_id="2", tender_name="безценный",
+                settlement="חיפה", area_sqm=800.0, closing_date="2099-01-01"),
+        ]
+
+
 class TestTopCommand:
     """Сама команда, а не только её начинка.
 
@@ -400,6 +416,54 @@ class TestCityCommand:
         assert code == 2
         assert "Нет токена" in capsys.readouterr().out
 
+    def test_it_shows_where_the_lots_were_lost(self, config_file, capsys):
+        """Пустой срез обязан назвать причину, а не просто оказаться пустым.
+
+        Первый боевой прогон дал ровно ноль лотов по Иерусалиму, и по
+        сообщению нельзя было понять, чего не хватило: города в базе, цены
+        или запаса под порогом. Воронка отвечает на это числами.
+        """
+        self.fill(config_file)
+        capsys.readouterr()
+        cli.main([
+            "--config", str(config_file), "city",
+            "--city", "Иерусалим", "--max-usd", "1",
+        ])
+        out = capsys.readouterr().out
+        counts = dict(
+            (line.rsplit(maxsplit=1)[0].strip(), int(line.rsplit(maxsplit=1)[1]))
+            for line in out.splitlines()
+            if line.startswith("  ") and line.rsplit(maxsplit=1)[-1].isdigit()
+        )
+        # Иерусалимский лот в базе есть, цена у него есть, а под порог в
+        # доллар он не проходит — и воронка называет именно этот шаг.
+        assert counts["город совпал"] == 1
+        assert counts["с объявленной ценой"] == 1
+        assert counts["под порогом цены"] == 0
+        assert "Отбор:" in out
+
+    def test_the_indicators_are_recomputed(self, config_file, capsys, monkeypatch):
+        """В строках среза стоят числа, а не прочерки.
+
+        Срез читал лоты из базы как есть. Показатели там записаны в день
+        загрузки лота — у большинства не записаны вовсе, — и витрина честно
+        показывала прочерк там, где обещала показатель.
+        """
+        from tests.test_pipeline import comparables_for
+
+        self.fill(config_file)
+        monkeypatch.setattr(
+            pipeline, "build_appraiser", lambda *a, **k: comparables_for("ירושלים")
+        )
+        capsys.readouterr()
+        cli.main(["--config", str(config_file), "city", "--city", "Иерусалим"])
+        row = [
+            line for line in capsys.readouterr().out.splitlines()
+            if "иерусалимский" in line
+        ][0]
+        # Оценка — восьмая колонка TABLE_COLUMNS, считая от названия тендера.
+        assert row.split(", ")[7] != "—"
+
 
 class TestEnrichCommand:
     """Прогон кадастра по базе: команда должна запускаться и без сети."""
@@ -409,6 +473,74 @@ class TestEnrichCommand:
         code = cli.main(["--config", str(config_file), "enrich", "--minutes", "0"])
         assert code == 0
         assert "выключено" in capsys.readouterr().out
+
+
+class TestAllCommand:
+    """Полная выгрузка: все предложения со всеми показателями.
+
+    Витрина обещает «все», и главная её проверка — что лот без цены или без
+    оценки из неё не исчезает. Пустая клетка — это сведение о лоте; молча
+    выброшенный лот — потеря.
+    """
+
+    @pytest.fixture(autouse=True)
+    def scorable(self, monkeypatch):
+        from tests.test_pipeline import comparables_for
+
+        monkeypatch.setattr(
+            pipeline, "build_appraiser", lambda *a, **k: comparables_for("חיפה")
+        )
+        monkeypatch.setattr(pipeline, "backfill_settlement_codes", lambda *a, **k: 0)
+        monkeypatch.setattr(pipeline, "SOURCES_BY_NAME", {"fake": MixedSource})
+        monkeypatch.setattr(cli, "SOURCES_BY_NAME", {"fake": MixedSource})
+
+    def fill(self, config_file):
+        cli.main(["--config", str(config_file), "run", "--sources", "fake", "--no-notify"])
+
+    def test_it_runs_and_shows_every_lot(self, config_file, capsys):
+        self.fill(config_file)
+        capsys.readouterr()
+        assert cli.main(["--config", str(config_file), "all"]) == 0
+        out = capsys.readouterr().out
+        assert "Все предложения — полная выгрузка" in out
+        # Оба лота на месте: и тот, что с ценой, и безымянный по цене.
+        assert "с ценой" in out
+        assert "безценный" in out
+        assert "оценённый" in out
+
+    def test_it_counts_what_is_known(self, config_file, capsys):
+        self.fill(config_file)
+        capsys.readouterr()
+        cli.main(["--config", str(config_file), "all"])
+        assert "Лотов: 2 · с ценой: 1" in capsys.readouterr().out
+
+    def test_lots_with_a_price_come_first(self, config_file, capsys):
+        self.fill(config_file)
+        capsys.readouterr()
+        cli.main(["--config", str(config_file), "all"])
+        out = capsys.readouterr().out
+        assert out.index("оценённый") < out.index("безценный")
+
+    def test_the_columns_are_named_before_the_rows(self, config_file, capsys):
+        self.fill(config_file)
+        capsys.readouterr()
+        cli.main(["--config", str(config_file), "all"])
+        out = capsys.readouterr().out
+        assert "цена ₪/м²" in out
+        assert out.index("цена ₪/м²") < out.index("оценённый")
+
+    def test_csv_holds_the_full_list(self, config_file, tmp_path):
+        self.fill(config_file)
+        out = tmp_path / "all.csv"
+        cli.main(["--config", str(config_file), "all", "--limit", "1", "--out", str(out)])
+        # Сообщение урезано до одной строки, выгрузка — нет.
+        assert len(out.read_text("utf-8").strip().splitlines()) == 3
+
+    def test_send_without_a_token_says_so(self, config_file, capsys):
+        self.fill(config_file)
+        capsys.readouterr()
+        assert cli.main(["--config", str(config_file), "all", "--send"]) == 2
+        assert "Нет токена" in capsys.readouterr().out
 
 
 def test_stats_command_reports_empty_database(config_file, capsys):

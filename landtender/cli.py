@@ -25,6 +25,7 @@ from .pipeline import (
     stored_lots,
 )
 from .report import (
+    build_all_digest,
     build_city_digest,
     build_console_report,
     build_farmland_digest,
@@ -142,6 +143,21 @@ def build_parser() -> argparse.ArgumentParser:
     city_cmd.add_argument("--send", action="store_true", help="отправить в Telegram")
     city_cmd.add_argument("--all", action="store_true", help="включая закрытые тендеры")
     city_cmd.add_argument("--out", help="выгрузить список в CSV")
+
+    all_cmd = sub.add_parser(
+        "all", help="полная выгрузка: все предложения со всеми показателями"
+    )
+    all_cmd.add_argument(
+        "--limit", type=int, default=0,
+        help="сколько лотов показать в сообщениях (0 — все; CSV всегда полный)",
+    )
+    all_cmd.add_argument("--send", action="store_true", help="отправить в Telegram")
+    all_cmd.add_argument("--all", action="store_true", help="включая закрытые тендеры")
+    all_cmd.add_argument("--out", help="выгрузить список в CSV")
+    all_cmd.add_argument(
+        "--attach", action="store_true",
+        help="приложить CSV к сообщению (нужен --out)",
+    )
 
     sub.add_parser("stats", help="показать состояние базы и последний запуск")
 
@@ -463,8 +479,14 @@ def cmd_top(args: argparse.Namespace) -> int:
     в базе числа посчитаны в день загрузки лота, когда сравнимых было меньше,
     и рейтинг по ним сравнивал бы лоты по разным меркам.
     """
-    from .notify import TelegramError, TelegramNotifier
-    from .pipeline import backfill_settlement_codes, build_http, explain_top, top_lots
+    from .pipeline import (
+        active_lots,
+        backfill_settlement_codes,
+        build_http,
+        explain_top,
+        top_lots,
+    )
+    from .valuation import gaps_by_source
 
     config = load_config(args.config)
     # Рейтинг строится на оценке, поэтому она нужна независимо от конфига:
@@ -481,6 +503,7 @@ def cmd_top(args: argparse.Namespace) -> int:
         backfill_settlement_codes(config, http, storage)
         lots = top_lots(config, http, storage, limit=args.limit, only_active=not args.all)
         breakdown = explain_top(config, http, storage) if args.why else {}
+        by_source = gaps_by_source(active_lots(storage)) if args.why else {}
 
     blocks = build_top_digest(lots, limit=args.limit, only_active=not args.all)
 
@@ -489,27 +512,21 @@ def cmd_top(args: argparse.Namespace) -> int:
         for reason, count in breakdown.items():
             print(f"  {reason:<26} {count}")
         print()
+        # Общий счётчик говорит, скольким лотам не хватает площади, но не
+        # говорит, чьим. А чинится это по-разному: тендеру рм"и площадь можно
+        # добрать из кадастра, а проект городского обновления её вовсе не
+        # публикует — добирать нечего.
+        print("Чего не хватает — по источникам:")
+        for source, row in by_source.items():
+            gaps = ", ".join(f"{name} {value}" for name, value in row.items())
+            print(f"  {source:<20} {gaps}")
+        print()
 
     if args.out:
         export_csv(lots, Path(args.out))
         print(f"CSV: {args.out}")
 
-    if not args.send:
-        print(preview_messages(blocks))
-        return 0
-
-    token = config.get("telegram", "bot_token")
-    chat_id = config.get("telegram", "chat_id")
-    if not token or not chat_id:
-        print("✗ Нет токена или канала. Запустите: landtender setup")
-        return 2
-    try:
-        sent = TelegramNotifier(bot_token=str(token), chat_id=str(chat_id)).send_blocks(blocks)
-    except TelegramError as exc:
-        print(f"✗ Отправка не прошла: {exc}")
-        return 1
-    print(f"✓ Топ отправлен ({sent} сообщ.): мест {len(lots)}")
-    return 0
+    return _deliver(config, blocks, args.send, f"Топ отправлен: мест {len(lots)}")
 
 
 def cmd_enrich(args: argparse.Namespace) -> int:
@@ -539,56 +556,73 @@ def cmd_enrich(args: argparse.Namespace) -> int:
 
 
 def cmd_city(args: argparse.Namespace) -> int:
-    """Срез по городу: участки заданного назначения дешевле порога."""
-    from .notify import TelegramError, TelegramNotifier
-    from .pipeline import city_lots
+    """Срез по городу: участки заданного назначения дешевле порога.
+
+    Показатели пересчитываются здесь так же, как в топе. Раньше срез читал
+    лоты из базы как есть, и в его строках стояли прочерки: числа в базе
+    записаны в день загрузки лота, а у большинства не записаны вовсе.
+    """
+    from .pipeline import (
+        backfill_settlement_codes,
+        build_http,
+        evaluate_lots,
+        select_city,
+    )
 
     config = load_config(args.config)
+    config.data.setdefault("valuation", {})["estimate"] = True
+
+    http = build_http(config)
     with open_storage(config, args.db) as storage:
-        lots = city_lots(
+        backfill_land_use(storage)
+        backfill_settlement_codes(config, http, storage)
+        lots, counts = select_city(
             storage,
             city=args.city,
             purpose=args.purpose,
             max_usd=args.max_usd,
             only_active=not args.all,
         )
+        lots = evaluate_lots(config, http, storage, lots)
+
+    print("Отбор по городу:")
+    for name, value in counts.items():
+        print(f"  {name:<22} {value}")
+    print()
 
     blocks = build_city_digest(
         lots, city=args.city, max_usd=args.max_usd,
-        max_lots=args.limit, only_active=not args.all,
+        max_lots=args.limit, only_active=not args.all, counts=counts,
     )
 
     if args.out:
         export_csv(lots, Path(args.out))
         print(f"CSV: {args.out}")
 
-    if not args.send:
-        print(preview_messages(blocks))
-        return 0
-
-    token = config.get("telegram", "bot_token")
-    chat_id = config.get("telegram", "chat_id")
-    if not token or not chat_id:
-        print("✗ Нет токена или канала. Запустите: landtender setup")
-        return 2
-    try:
-        sent = TelegramNotifier(bot_token=str(token), chat_id=str(chat_id)).send_blocks(blocks)
-    except TelegramError as exc:
-        print(f"✗ Отправка не прошла: {exc}")
-        return 1
-    print(f"✓ Срез по городу отправлен ({sent} сообщ.): лотов {len(lots)}")
-    return 0
+    return _deliver(
+        config, blocks, args.send, f"Срез по городу отправлен: лотов {len(lots)}"
+    )
 
 
 def cmd_farmland(args: argparse.Namespace) -> int:
-    """Показывает всю сельхозземлю из базы, а не только новую за сегодня."""
-    from .notify import TelegramError, TelegramNotifier
+    """Показывает всю сельхозземлю из базы, а не только новую за сегодня.
+
+    Показатели, как и в остальных витринах, считаются заново: сохранённые в
+    базе устарели в тот же день, когда база сравнимых сделок подросла.
+    """
+    from .pipeline import backfill_settlement_codes, build_http, evaluate_lots
 
     config = load_config(args.config)
+    config.data.setdefault("valuation", {})["estimate"] = True
+
+    http = build_http(config)
     with open_storage(config, args.db) as storage:
         # База могла накопиться до появления разбора назначения — доразбираем
         backfill_land_use(storage)
-        lots = farmland_lots(storage, only_active=not args.all)
+        backfill_settlement_codes(config, http, storage)
+        lots = evaluate_lots(
+            config, http, storage, farmland_lots(storage, only_active=not args.all)
+        )
 
     blocks = build_farmland_digest(
         lots, max_lots=args.limit, only_active=not args.all, max_usd=args.max_usd
@@ -598,7 +632,28 @@ def cmd_farmland(args: argparse.Namespace) -> int:
         export_csv(lots, Path(args.out))
         print(f"CSV: {args.out}")
 
-    if not args.send:
+    return _deliver(
+        config, blocks, args.send, f"Сводка по сельхозземле отправлена: лотов {len(lots)}"
+    )
+
+
+def _deliver(
+    config,
+    blocks: list[str],
+    send: bool,
+    summary: str,
+    attach: Path | None = None,
+) -> int:
+    """Показывает витрину в консоли или отправляет её в Telegram.
+
+    Один и тот же хвост был скопирован в четыре команды, и каждая копия
+    расходилась по мелочи. Хуже того, копия — это ещё одна ветка, которую
+    тесты команды не проходят: ровно так дважды уезжал недостающий импорт,
+    видимый только в бою.
+    """
+    from .notify import TelegramError, TelegramNotifier
+
+    if not send:
         print(preview_messages(blocks))
         return 0
 
@@ -607,13 +662,50 @@ def cmd_farmland(args: argparse.Namespace) -> int:
     if not token or not chat_id:
         print("✗ Нет токена или канала. Запустите: landtender setup")
         return 2
+    notifier = TelegramNotifier(bot_token=str(token), chat_id=str(chat_id))
     try:
-        sent = TelegramNotifier(bot_token=str(token), chat_id=str(chat_id)).send_blocks(blocks)
+        sent = notifier.send_blocks(blocks)
+        if attach is not None and attach.exists():
+            notifier.send_document(attach, caption="Полная выгрузка со всеми показателями")
     except TelegramError as exc:
         print(f"✗ Отправка не прошла: {exc}")
         return 1
-    print(f"✓ Сводка по сельхозземле отправлена ({sent} сообщ.): лотов {len(lots)}")
+    print(f"✓ {summary} ({sent} сообщ.)")
     return 0
+
+
+def cmd_all(args: argparse.Namespace) -> int:
+    """Полная выгрузка: все действующие предложения со всеми показателями.
+
+    Ежедневная сводка показывает только новое, а топ — только лучшее. На
+    вопрос «что вообще есть в базе и с какими числами» до сих пор не
+    отвечала ни одна витрина, хотя именно это и есть выгрузка.
+    """
+    from .pipeline import all_lots, backfill_settlement_codes, build_http
+
+    config = load_config(args.config)
+    # Без оценки половина показателей — прочерки, а выгрузка обещает все.
+    config.data.setdefault("valuation", {})["estimate"] = True
+
+    http = build_http(config)
+    with open_storage(config, args.db) as storage:
+        backfill_land_use(storage)
+        backfill_settlement_codes(config, http, storage)
+        lots = all_lots(config, http, storage, only_active=not args.all)
+
+    out = Path(args.out) if args.out else None
+    if out is not None:
+        export_csv(lots, out)
+        print(f"CSV: {out}")
+
+    blocks = build_all_digest(
+        lots, only_active=not args.all, max_lots=args.limit or None
+    )
+    return _deliver(
+        config, blocks, args.send,
+        f"Полная выгрузка отправлена: лотов {len(lots)}",
+        attach=out if (args.attach and out is not None) else None,
+    )
 
 
 def cmd_stats(args: argparse.Namespace) -> int:
@@ -657,6 +749,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_top(args)
     if command == "city":
         return cmd_city(args)
+    if command == "all":
+        return cmd_all(args)
     if command == "enrich":
         return cmd_enrich(args)
     if command == "harvest":

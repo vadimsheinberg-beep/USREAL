@@ -30,6 +30,14 @@ on:
         description: "Прислать в канал топ-10 предложений"
         type: boolean
         default: true
+      send_all:
+        description: "Прислать в канал полную выгрузку со всеми показателями"
+        type: boolean
+        default: true
+      all_limit:
+        description: "Сколько лотов показывать строками (0 — все; CSV всегда полный)"
+        type: string
+        default: "0"
       cadastre:
         description: "Прогнать кадастр govmap по накопленной базе"
         type: boolean
@@ -177,6 +185,23 @@ jobs:
           [ "$SEND_CITY" = "true" ] && [ "$DRY_RUN" != "true" ] && flags="--send"
           landtender city --city ירושלים --max-usd 1000000 $flags \
             --out "data/jerusalem-$(date +%F).csv"
+
+      - name: Все предложения — полная выгрузка со всеми показателями
+        # Топ отвечает на «что брать», сводка — на «что нового». На вопрос
+        # «что вообще есть в базе и с какими числами» до этого шага не
+        # отвечала ни одна витрина. Строками уходит весь список, к нему
+        # прикладывается CSV — по нему считают, а не читают.
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SEND_ALL: ${{ github.event.inputs.send_all || 'true' }}
+          ALL_LIMIT: ${{ github.event.inputs.all_limit || '0' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          flags=""
+          [ "$SEND_ALL" = "true" ] && [ "$DRY_RUN" != "true" ] && flags="--send --attach"
+          landtender all --limit "$ALL_LIMIT" $flags --out "data/all-$(date +%F).csv"
 
       - name: Сохранить выгрузку как артефакт
         if: always()

@@ -410,3 +410,35 @@ class TestPlaceByCode:
     def test_neither_code_nor_name_means_no_comparables(self):
         comps = collect_comparables([self.coded(str(i), 4000) for i in range(5)])
         assert nearby(comps, deal("цель", city=None)) == []
+
+
+class TestGapsBySource:
+    """Разрез пробелов по источникам: чинится каждый источник по-своему."""
+
+    def make(self, source, **kwargs):
+        from landtender.models import Lot
+
+        return Lot(source=source, source_id=kwargs.pop("sid", "1"), **kwargs)
+
+    def test_it_counts_each_gap_per_source(self):
+        from landtender.valuation import gaps_by_source
+
+        rows = gaps_by_source([
+            self.make("rmi", sid="1", settlement="חיפה", area_sqm=500.0,
+                      price_nis=1.0, gush="1", chelka="2"),
+            self.make("rmi", sid="2", settlement="חיפה", area_sqm=1.0),
+            self.make("renewal", sid="3"),
+        ])
+        assert rows["rmi"]["всего"] == 2
+        assert rows["rmi"]["без площади"] == 1
+        assert rows["renewal"]["без города"] == 1
+        assert rows["renewal"]["без гуш/хелка"] == 1
+
+    def test_the_biggest_source_comes_first(self):
+        from landtender.valuation import gaps_by_source
+
+        rows = gaps_by_source(
+            [self.make("мелкий", sid="1")]
+            + [self.make("крупный", sid=str(i)) for i in range(3)]
+        )
+        assert list(rows) == ["крупный", "мелкий"]
