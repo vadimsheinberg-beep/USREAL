@@ -23,6 +23,20 @@ MAX_MESSAGE_LEN = 4096
 #: Запас на случай, если Telegram считает длину чуть иначе.
 SAFE_LEN = 3900
 
+#: Сколько сообщений можно отправить залпом, не упираясь в лимит частоты.
+BURST_MESSAGES = 15
+
+#: Пауза между сообщениями короткой сводки — лимит ей не грозит.
+FAST_DELAY_SEC = 0.5
+
+#: Пауза для длинной выгрузки: Telegram пускает в один канал около двадцати
+#: сообщений в минуту, поэтому три секунды — это темп, а не перестраховка.
+SLOW_DELAY_SEC = 3.1
+
+#: Сколько раз повторять сообщение, отбитое по лимиту частоты. Очередь из
+#: сотни сообщений переживает больше отказов, чем сводка из трёх.
+RETRY_ATTEMPTS = 6
+
 
 class TelegramError(RuntimeError):
     """Не удалось доставить сообщение."""
@@ -144,13 +158,23 @@ class TelegramNotifier:
             raise TelegramError(f"sendDocument HTTP {response.status_code}: {response.text[:300]}")
 
     def send_blocks(self, blocks: Sequence[str]) -> int:
-        """Отправляет сводку. Возвращает число доставленных сообщений."""
+        """Отправляет сводку. Возвращает число доставленных сообщений.
+
+        Темп выбирается по длине сводки. Дневная сводка — несколько
+        сообщений, и полсекунды между ними ничем не грозят. Полная выгрузка
+        по всей базе — это около ста двадцати сообщений, а Telegram пускает в
+        один канал примерно двадцать в минуту. На прежнем темпе всё после
+        первых двадцати упиралось бы в 429, и выгрузка обрывалась бы на
+        середине: три попытки повтора такую очередь не вытягивают.
+        """
         messages = chunk_blocks(blocks)
+        delay = FAST_DELAY_SEC if len(messages) <= BURST_MESSAGES else SLOW_DELAY_SEC
         sent = 0
-        for message in messages:
+        for number, message in enumerate(messages):
+            if number:
+                time.sleep(delay)
             self._send(message)
             sent += 1
-            time.sleep(0.5)  # Telegram ограничивает частоту в один чат
         return sent
 
     def _send(self, text: str, attempt: int = 0) -> None:
@@ -166,7 +190,7 @@ class TelegramNotifier:
         except requests.RequestException as exc:
             raise TelegramError(f"Сеть недоступна: {exc}") from exc
 
-        if response.status_code == 429 and attempt < 3:
+        if response.status_code == 429 and attempt < RETRY_ATTEMPTS:
             retry_after = 5
             try:
                 retry_after = int(response.json().get("parameters", {}).get("retry_after", 5))

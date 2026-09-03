@@ -186,3 +186,53 @@ class TestSendDocument:
 
         notifier.send_document(path, caption="я" * 2000)
         assert len(captured["caption"]) == 1024
+
+
+class TestSendPacing:
+    """Темп отправки: длинная выгрузка не должна упираться в лимит частоты.
+
+    Полная выгрузка по всей базе — это около ста двадцати сообщений, а
+    Telegram пускает в один канал примерно двадцать в минуту. На прежнем
+    темпе в полсекунды всё после первых двадцати отбивалось бы по 429, и
+    выгрузка обрывалась бы на середине.
+    """
+
+    def send(self, notifier, monkeypatch, count):
+        delays = []
+        monkeypatch.setattr("requests.post", lambda *a, **k: FakeResponse({"ok": True}, 200))
+        monkeypatch.setattr("time.sleep", lambda seconds: delays.append(seconds))
+        sent = notifier.send_blocks([f"блок {i}" * 400 for i in range(count)])
+        return sent, delays
+
+    def test_a_short_digest_goes_out_fast(self, notifier, monkeypatch):
+        from landtender.notify.telegram import FAST_DELAY_SEC
+
+        sent, delays = self.send(notifier, monkeypatch, 3)
+        assert sent == 3
+        assert set(delays) == {FAST_DELAY_SEC}
+
+    def test_a_long_export_slows_to_the_channel_limit(self, notifier, monkeypatch):
+        from landtender.notify.telegram import SLOW_DELAY_SEC
+
+        sent, delays = self.send(notifier, monkeypatch, 40)
+        assert sent == 40
+        assert set(delays) == {SLOW_DELAY_SEC}
+
+    def test_no_pause_after_the_last_message(self, notifier, monkeypatch):
+        """Пауза нужна между сообщениями, а не в конце: это чистое ожидание."""
+        sent, delays = self.send(notifier, monkeypatch, 3)
+        assert len(delays) == sent - 1
+
+    def test_rate_limit_is_retried_more_than_a_few_times(self, notifier, monkeypatch):
+        """Очередь из сотни сообщений переживает больше отказов, чем сводка из трёх."""
+        calls = {"n": 0}
+
+        def flaky(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] <= 4:
+                return FakeResponse({"parameters": {"retry_after": 1}}, 429)
+            return FakeResponse({"ok": True}, 200)
+
+        monkeypatch.setattr("requests.post", flaky)
+        monkeypatch.setattr("time.sleep", lambda seconds: None)
+        assert notifier.send_blocks(["один блок"]) == 1
