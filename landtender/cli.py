@@ -138,7 +138,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     city_cmd.add_argument("--city", required=True, help="город (любое написание)")
     city_cmd.add_argument("--max-usd", type=float, help="потолок цены в долларах")
-    city_cmd.add_argument("--purpose", default="מגורים", help="назначение по документам")
+    city_cmd.add_argument("--purpose", help="назначение текстом, как его пишет портал")
+    city_cmd.add_argument(
+        "--land-use", dest="land_use",
+        help="разобранная категория: residential, agriculture, commerce, industry…",
+    )
     city_cmd.add_argument("--limit", type=int, default=60, help="сколько лотов показать")
     city_cmd.add_argument("--send", action="store_true", help="отправить в Telegram")
     city_cmd.add_argument("--all", action="store_true", help="включая закрытые тендеры")
@@ -565,6 +569,7 @@ def cmd_city(args: argparse.Namespace) -> int:
     from .pipeline import (
         backfill_settlement_codes,
         build_http,
+        city_kinds,
         evaluate_lots,
         select_city,
     )
@@ -582,12 +587,22 @@ def cmd_city(args: argparse.Namespace) -> int:
             purpose=args.purpose,
             max_usd=args.max_usd,
             only_active=not args.all,
+            land_use=args.land_use,
         )
         lots = evaluate_lots(config, http, storage, lots)
+        # Перечень значений нужен именно тогда, когда отбор дал ноль: срез по
+        # Иерусалиму дважды выходил пустым, и оба раза причина оказалась не
+        # той, на которую я думал. Догадка о содержимом чужого поля стоит
+        # прогона, перечень — одного запроса к своей же базе.
+        kinds = city_kinds(storage, args.city, only_active=not args.all)
 
     print("Отбор по городу:")
     for name, value in counts.items():
         print(f"  {name:<22} {value}")
+    if kinds:
+        print("  что вообще есть в городе (назначение / категория):")
+        for name, value in list(kinds.items())[:15]:
+            print(f"    {value:>5}  {name}")
     print()
 
     blocks = build_city_digest(

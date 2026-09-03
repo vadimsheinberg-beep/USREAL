@@ -447,6 +447,32 @@ class TestCityCommand:
         assert counts["под порогом цены"] == 0
         assert "Отбор:" in out
 
+    def test_it_lists_what_purposes_the_city_actually_has(self, config_file, capsys):
+        """Перечень значений вместо догадок о содержимом чужого поля.
+
+        Срез по Иерусалиму дважды выходил пустым, и оба раза причина была не
+        та, на которую я думал: сперва решил, что дело в цене, потом — что
+        назначение не заполнено. Ни то ни другое. Перечень отвечает точно.
+        """
+        self.fill(config_file)
+        capsys.readouterr()
+        cli.main(["--config", str(config_file), "city", "--city", "Иерусалим"])
+        out = capsys.readouterr().out
+        assert "что вообще есть в городе" in out
+        assert "מגורים" in out
+
+    def test_the_category_filter_does_not_rely_on_free_text(self, config_file, capsys):
+        """Категория разобрана нами, а текст назначения пишет портал."""
+        self.fill(config_file)
+        capsys.readouterr()
+        cli.main([
+            "--config", str(config_file), "city",
+            "--city", "Иерусалим", "--land-use", "agriculture",
+        ])
+        out = capsys.readouterr().out
+        assert "категория совпала" in out
+        assert "иерусалимский" not in out
+
     def test_lots_without_a_stated_purpose_stay_in(self, config_file, capsys):
         """Молчание портала о назначении — не ответ «не жильё».
 

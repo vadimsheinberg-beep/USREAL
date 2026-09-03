@@ -549,8 +549,17 @@ def backfill_settlement_codes(config: Config, http: HttpClient, storage: Storage
         if tender_id is not None and code is not None:
             codes[str(tender_id)] = code
 
+    tenders = sum(1 for item in as_list(data) if isinstance(item, dict))
     updated = storage.set_settlement_codes("rmi_michrazim", codes)
-    log.info("Коды населённых пунктов: проставлено %d лотам", updated)
+    # Одно число «проставлено 0» неотличимо от четырёх разных причин: портал
+    # не ответил, в выдаче нет кода, тендеры в базе другие, или всё уже
+    # проставлено. У 946 действующих лотов рм"и места нет до сих пор, и
+    # выбирать между этими причинами на глаз больше нельзя.
+    log.info(
+        "Коды населённых пунктов: тендеров в выдаче %d, из них с кодом %d, "
+        "проставлено лотам %d",
+        tenders, len(codes), updated,
+    )
     return updated
 
 
@@ -707,12 +716,32 @@ def explain_top(
     return explain_estimates(lots, build_appraiser(config, http, storage) or [])
 
 
+def city_kinds(storage: Storage, city: str, only_active: bool = True) -> dict[str, int]:
+    """Какие назначения вообще встречаются у лотов города.
+
+    Срез по Иерусалиму дважды вышел пустым, и оба раза причина оказалась не
+    та, на которую я думал. Догадки о содержимом чужого поля стоят по
+    прогону каждая; перечень значений стоит одного и отвечает окончательно.
+    """
+    from .places import resolve as resolve_places
+
+    names, _ = resolve_places([city])
+    counts: dict[str, int] = {}
+    for lot in active_lots(storage, only_active):
+        if not place_matches(lot.settlement, names or [city]):
+            continue
+        key = f"{lot.purpose or '—'} / {lot.land_use or '—'}"
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items(), key=lambda item: -item[1]))
+
+
 def select_city(
     storage: Storage,
     city: str,
     purpose: str | None = None,
     max_usd: float | None = None,
     only_active: bool = True,
+    land_use: str | None = None,
 ) -> tuple[list[Lot], dict[str, int]]:
     """Лоты одного города плюс счётчики отсева на каждом шаге.
 
@@ -738,6 +767,12 @@ def select_city(
     names, _ = resolve_places([city])
     lots = [lot for lot in lots if place_matches(lot.settlement, names or [city])]
     counts["город совпал"] = len(lots)
+
+    if land_use:
+        # Разобранная категория надёжнее текста портала: «жильё» он пишет
+        # десятком способов, а то и не пишет вовсе.
+        lots = [lot for lot in lots if lot.land_use == land_use]
+        counts["категория совпала"] = len(lots)
 
     if purpose:
         # Назначение портал заполняет далеко не всегда: из 213 иерусалимских
