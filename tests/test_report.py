@@ -734,7 +734,37 @@ class TestCityDigest:
         assert "Порог цены: до $1.00 млн" in self.text([self.resid()], max_usd=1_000_000)
 
     def test_empty_result_says_so(self):
+        """Без счётчиков сказать больше нечего — но и молчать нельзя."""
         assert "Под условия ничего не подошло" in self.text([])
+
+    def test_an_empty_slice_names_the_step_that_emptied_it(self):
+        """За «ничего не подошло» в разное время стояли три разные причины.
+
+        Срез по Иерусалиму выходил пустым трижды: сперва думали на цену,
+        потом на незаполненное назначение, а на деле у всех 213 записей
+        города просто нет объявленной цены — это проекты городского
+        обновления, а не торги.
+        """
+        text = self.text([], counts={
+            "активных лотов": 2364,
+            "город совпал": 213,
+            "с объявленной ценой": 0,
+            "без цены": 213,
+            "под порогом цены": 0,
+        })
+        assert "цены нет ни у одной" in text
+        assert "213" in text
+
+    def test_a_city_absent_from_the_base_says_exactly_that(self):
+        text = self.text([], counts={"активных лотов": 2364, "город совпал": 0})
+        assert "Такого города в базе нет" in text
+
+    def test_everything_too_expensive_says_that_instead(self):
+        text = self.text([], counts={
+            "активных лотов": 2364, "город совпал": 5,
+            "с объявленной ценой": 5, "под порогом цены": 0,
+        })
+        assert "дороже порога" in text
 
     def test_rows_use_the_table_format(self):
         from landtender.report import TABLE_COLUMNS

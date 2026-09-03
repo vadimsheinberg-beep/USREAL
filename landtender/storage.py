@@ -12,7 +12,7 @@ import logging
 import sqlite3
 from contextlib import closing
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 from .models import Lot
 
@@ -286,6 +286,36 @@ class Storage:
         )
         self.conn.commit()
         return cur.rowcount or 0
+
+    def settlement_code_gap(self, source: str, tender_ids: Sequence[str]) -> dict[str, int]:
+        """Где именно рвётся связь «тендер → код населённого пункта».
+
+        Бэкфилл доложил «проставлено 0» при десяти тысячах тендеров с кодом в
+        выдаче, и это могло означать что угодно: коды уже стоят, номера
+        тендеров в базе другие, номера пусты. Три разные починки — значит,
+        считать надо все три числа, а не гадать между ними.
+        """
+        known = set(tender_ids)
+        rows = self.conn.execute(
+            "SELECT tender_id, settlement_code FROM lots WHERE source = ?", (source,)
+        ).fetchall()
+        out = {
+            "лотов источника": len(rows),
+            "код уже стоит": 0,
+            "без кода, номер тендера пуст": 0,
+            "без кода, тендера нет в выдаче": 0,
+            "без кода, тендер в выдаче есть": 0,
+        }
+        for tender_id, code in rows:
+            if code is not None:
+                out["код уже стоит"] += 1
+            elif not tender_id:
+                out["без кода, номер тендера пуст"] += 1
+            elif str(tender_id) in known:
+                out["без кода, тендер в выдаче есть"] += 1
+            else:
+                out["без кода, тендера нет в выдаче"] += 1
+        return out
 
     def clear_land_use_on_built_land(self) -> int:
         """Снимает назначение с площадок под снос и расселение.

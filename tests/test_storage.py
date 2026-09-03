@@ -224,3 +224,38 @@ class TestSettlementCodeBackfill:
     def test_nothing_to_do_is_not_an_error(self, tmp_path):
         with Storage(tmp_path / "s.sqlite3") as store:
             assert store.set_settlement_codes("rmi_michrazim", {}) == 0
+
+
+class TestSettlementCodeGap:
+    """Где рвётся связь «тендер → код населённого пункта».
+
+    Бэкфилл доложил «проставлено 0» при десяти тысячах тендеров с кодом в
+    выдаче. За этим одним числом стоят три разные причины и три разные
+    починки — значит, считать надо все три.
+    """
+
+    def rows(self, storage, now="2026-09-03T00:00:00+00:00"):
+        from landtender.models import Lot
+
+        lots = [
+            Lot(source="rmi_michrazim", source_id="1", tender_id="20240349",
+                settlement_code=4000),
+            Lot(source="rmi_michrazim", source_id="2", tender_id="20240349"),
+            Lot(source="rmi_michrazim", source_id="3", tender_id="19990001"),
+            Lot(source="rmi_michrazim", source_id="4", tender_id=None),
+        ]
+        for lot in lots:
+            storage.upsert_lot(lot, now)
+        return storage.settlement_code_gap("rmi_michrazim", ["20240349"])
+
+    def test_it_separates_the_three_causes(self, tmp_path):
+        from landtender.storage import Storage
+
+        with Storage(tmp_path / "db.sqlite3") as storage:
+            gap = self.rows(storage)
+
+        assert gap["лотов источника"] == 4
+        assert gap["код уже стоит"] == 1
+        assert gap["без кода, тендер в выдаче есть"] == 1
+        assert gap["без кода, тендера нет в выдаче"] == 1
+        assert gap["без кода, номер тендера пуст"] == 1

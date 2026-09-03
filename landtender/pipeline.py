@@ -560,6 +560,15 @@ def backfill_settlement_codes(config: Config, http: HttpClient, storage: Storage
         "проставлено лотам %d",
         tenders, len(codes), updated,
     )
+    if not updated:
+        # «Проставлено 0» при десяти тысячах тендеров с кодом — это не ответ,
+        # а вопрос. Три возможные причины требуют трёх разных починок, и
+        # различать их на глаз я уже пробовал: дважды подряд ошибся.
+        gap = storage.settlement_code_gap("rmi_michrazim", list(codes))
+        log.info(
+            "Коды населённых пунктов, разбор: %s",
+            ", ".join(f"{name} {value}" for name, value in gap.items()),
+        )
     return updated
 
 
