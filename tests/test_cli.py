@@ -670,6 +670,37 @@ class TestSummaryCommand:
         assert "в CSV" in capsys.readouterr().out
 
 
+class TestFarmlandSkipsWhatItCannotShow:
+    """Пусто — это «нечего показать», а не «нет сельхозземли».
+
+    Первый прогон с --skip-empty всё равно отправил сообщение «Лотов: 0»:
+    команда считала лоты до порога цены, а показывала после. Считать надо
+    то же, что показываем.
+    """
+
+    @pytest.fixture(autouse=True)
+    def farm_source(self, monkeypatch):
+        monkeypatch.setattr(pipeline, "SOURCES_BY_NAME", {"fake": FarmSource})
+        monkeypatch.setattr(cli, "SOURCES_BY_NAME", {"fake": FarmSource})
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: [])
+
+    def run(self, config_file, capsys, *extra):
+        cli.main(["--config", str(config_file), "run", "--sources", "fake", "--no-notify"])
+        capsys.readouterr()
+        cli.main([
+            "--config", str(config_file), "farmland", "--send", "--skip-empty", *extra,
+        ])
+        return capsys.readouterr().out
+
+    def test_everything_above_the_ceiling_means_nothing_to_show(
+        self, config_file, capsys, monkeypatch
+    ):
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:AA")
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "-1001")
+        out = self.run(config_file, capsys, "--max-usd", "1")
+        assert "Пропущено (пусто)" in out
+
+
 class TestBackfillRunsOnce:
     """Коды населённых пунктов добираются раз в сутки, а не перед каждым показом.
 

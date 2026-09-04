@@ -660,9 +660,17 @@ def cmd_farmland(args: argparse.Namespace) -> int:
         export_csv(lots, Path(args.out))
         print(f"CSV: {args.out}")
 
+    # Пусто здесь означает «нечего показать», а не «нет сельхозземли»: сводка
+    # показывает лоты под порогом цены, и первый же прогон с --skip-empty
+    # отправил сообщение «Лотов: 0» — потому что считал вместе с теми, кого
+    # порог отсёк. Считать надо то же, что показываем.
+    shown = [
+        lot for lot in lots
+        if lot.price_usd and (args.max_usd is None or lot.price_usd <= args.max_usd)
+    ]
     return _deliver(
-        config, blocks, args.send, f"Сводка по сельхозземле: лотов {len(lots)}",
-        skip=bool(getattr(args, "skip_empty", False) and not lots),
+        config, blocks, args.send, f"Сводка по сельхозземле: лотов {len(shown)}",
+        skip=bool(getattr(args, "skip_empty", False) and not shown),
     )
 
 
