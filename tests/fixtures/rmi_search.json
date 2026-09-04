@@ -1,0 +1,38 @@
+[
+  {
+    "MichrazID": 20250142,
+    "MichrazName": "חי/142/2025",
+    "KodMerchav": 3,
+    "StatusMichraz": 1,
+    "KodYeudMichraz": 1,
+    "KodYeshuv": 4000,
+    "Yishuv": "חיפה",
+    "Shchuna": "נווה שאנן",
+    "KodSugMichraz": 2,
+    "YechidotDiur": 96,
+    "PirsumDate": "2026-07-01T00:00:00",
+    "SgiraDate": "2026-09-15T00:00:00",
+    "VaadaDate": "2026-09-22T00:00:00",
+    "ChoveretUpdateDate": "2026-07-10T00:00:00"
+  },
+  {
+    "MichrazID": 20250143,
+    "MichrazName": "מר/143/2025",
+    "KodMerchav": 2,
+    "StatusMichraz": 1,
+    "KodYeudMichraz": 1,
+    "KodYeshuv": 1200,
+    "Yishuv": "מודיעין",
+    "Shchuna": "בוכמן",
+    "PirsumDate": "2026-07-05T00:00:00",
+    "SgiraDate": "2026-08-30T00:00:00"
+  },
+  {
+    "MichrazID": 20250144,
+    "MichrazName": "טב/144/2025",
+    "StatusMichraz": 4,
+    "KodYeudMichraz": 4,
+    "Yishuv": "טבריה",
+    "PirsumDate": "2026-06-20T00:00:00"
+  }
+]

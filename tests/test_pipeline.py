@@ -1,0 +1,803 @@
+"""Сквозной прогон: сбор → оценка → сравнение со вчера → уведомление."""
+
+import pytest
+
+from landtender import pipeline
+from landtender.config import Config, DEFAULTS, _deep_merge
+from landtender.models import TIER_PREMIUM, TIER_STANDARD, Lot
+from landtender.money import FxRate
+from landtender.sources.base import Source
+from landtender.storage import Storage
+
+
+class FakeSource(Source):
+    name = "fake"
+    title = "тестовый источник"
+    #: Что источник вернёт на очередном вызове ``fetch``.
+    batches: list[list[Lot]] = []
+    calls = 0
+
+    def fetch(self):
+        batch = self.batches[min(FakeSource.calls, len(self.batches) - 1)]
+        FakeSource.calls += 1
+        return list(batch)
+
+
+class BrokenSource(Source):
+    name = "broken"
+    title = "падающий источник"
+
+    def fetch(self):
+        raise RuntimeError("портал недоступен")
+
+
+def make_config(**general) -> Config:
+    data = _deep_merge(
+        DEFAULTS,
+        {
+            "general": {"threshold_usd": 1_000_000, **general},
+            "sources": {"fake": {"enabled": True}, "broken": {"enabled": True}},
+            "telegram": {"enabled": False},
+        },
+    )
+    return Config(data=data)
+
+
+@pytest.fixture(autouse=True)
+def wire_fakes(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        pipeline, "SOURCES_BY_NAME", {"fake": FakeSource, "broken": BrokenSource}
+    )
+    monkeypatch.setattr(pipeline, "get_fx", lambda *a, **k: FxRate(3.6412, "2026-07-27", "test"))
+    monkeypatch.setattr(pipeline, "build_http", lambda config: object())
+    FakeSource.calls = 0
+    FakeSource.batches = [[]]
+
+
+def lot(**overrides) -> Lot:
+    data = dict(source="fake", source_id="1", tender_name="חי/142", units=60, price_nis=18_500_000.0)
+    data.update(overrides)
+    return Lot(**data)
+
+
+@pytest.fixture
+def storage(tmp_path):
+    with Storage(tmp_path / "run.sqlite3") as store:
+        yield store
+
+
+class TestRunOnce:
+    def test_new_lots_are_priced_and_classified(self, storage):
+        FakeSource.batches = [[lot(), lot(source_id="2", price_nis=2_000_000.0)]]
+        result = pipeline.run_once(make_config(), storage, only_sources=["fake"])
+
+        assert result.total_seen == 2
+        assert len(result.new_lots) == 2
+        tiers = {l.source_id: l.tier for l in result.new_lots}
+        assert tiers == {"1": TIER_PREMIUM, "2": TIER_STANDARD}
+        assert result.new_lots[0].price_usd == pytest.approx(5_080_742.6, rel=1e-4)
+
+    def test_second_run_reports_nothing_new(self, storage):
+        FakeSource.batches = [[lot()], [lot()]]
+        pipeline.run_once(make_config(), storage, only_sources=["fake"])
+        second = pipeline.run_once(make_config(), storage, only_sources=["fake"])
+        assert second.new_lots == []
+        assert second.changed_lots == []
+
+    def test_price_change_surfaces_as_changed(self, storage):
+        FakeSource.batches = [[lot()], [lot(price_nis=12_000_000.0)]]
+        pipeline.run_once(make_config(), storage, only_sources=["fake"])
+        second = pipeline.run_once(make_config(), storage, only_sources=["fake"])
+
+        assert len(second.changed_lots) == 1
+        _, changes = second.changed_lots[0]
+        assert "price_usd" in changes
+
+    def test_broken_source_does_not_stop_the_run(self, storage):
+        FakeSource.batches = [[lot()]]
+        result = pipeline.run_once(make_config(), storage, only_sources=["fake", "broken"])
+
+        assert len(result.new_lots) == 1
+        broken = next(s for s in result.sources if s.name == "broken")
+        assert broken.ok is False
+        assert "портал недоступен" in broken.error
+        assert result.ok is True
+
+    def test_run_fails_only_when_every_source_fails(self, storage):
+        result = pipeline.run_once(make_config(), storage, only_sources=["broken"])
+        assert result.ok is False
+
+    def test_priceless_lots_can_be_dropped(self, storage):
+        FakeSource.batches = [[lot(price_nis=None)]]
+        config = make_config()
+        config.data["valuation"]["keep_priceless"] = False
+        result = pipeline.run_once(config, storage, only_sources=["fake"])
+        assert result.new_lots == []
+
+    def test_custom_threshold_moves_lots_between_tiers(self, storage):
+        FakeSource.batches = [[lot()]]
+        result = pipeline.run_once(make_config(threshold_usd=10_000_000), storage, only_sources=["fake"])
+        assert result.new_lots[0].tier == TIER_STANDARD
+
+    def test_run_is_recorded_in_history(self, storage):
+        FakeSource.batches = [[lot()]]
+        pipeline.run_once(make_config(), storage, only_sources=["fake"])
+        assert storage.last_run() is not None
+
+    def test_unknown_source_name_is_rejected(self, storage):
+        with pytest.raises(ValueError, match="Неизвестные источники"):
+            pipeline.run_once(make_config(), storage, only_sources=["нет-такого"])
+
+
+class TestExpiredFilter:
+    def test_lot_with_past_closing_date_is_expired(self):
+        assert pipeline.is_expired(lot(closing_date="2026-07-26"), "2026-07-27") is True
+
+    def test_lot_closing_today_is_still_current(self):
+        assert pipeline.is_expired(lot(closing_date="2026-07-27"), "2026-07-27") is False
+
+    def test_future_closing_date_is_current(self):
+        assert pipeline.is_expired(lot(closing_date="2026-09-15"), "2026-07-27") is False
+
+    def test_closed_status_is_expired_even_without_date(self):
+        assert pipeline.is_expired(lot(status="סגור"), "2026-07-27") is True
+        assert pipeline.is_expired(lot(status="בוטל"), "2026-07-27") is True
+
+    def test_open_status_is_current(self):
+        assert pipeline.is_expired(lot(status="פתוח"), "2026-07-27") is False
+
+    def test_lot_without_dates_is_kept(self):
+        assert pipeline.is_expired(lot(), "2026-07-27") is False
+
+    def test_expired_lots_are_dropped_from_the_run(self, storage):
+        FakeSource.batches = [[
+            lot(source_id="старый", closing_date="2020-01-01"),
+            lot(source_id="актуальный", closing_date="2099-01-01"),
+        ]]
+        result = pipeline.run_once(make_config(), storage, only_sources=["fake"])
+
+        assert [l.source_id for l in result.new_lots] == ["актуальный"]
+        assert result.sources[0].skipped_expired == 1
+
+    def test_filter_can_be_switched_off(self, storage):
+        FakeSource.batches = [[lot(source_id="старый", closing_date="2020-01-01")]]
+        config = make_config()
+        config.data["general"]["hide_expired"] = False
+        result = pipeline.run_once(config, storage, only_sources=["fake"])
+
+        assert len(result.new_lots) == 1
+        assert result.sources[0].skipped_expired == 0
+
+
+class TestSelectSources:
+    def test_uses_enabled_sources_from_config(self):
+        assert set(pipeline.select_sources(make_config())) == {"fake", "broken"}
+
+    def test_explicit_list_wins(self):
+        assert pipeline.select_sources(make_config(), ["fake"]) == ["fake"]
+
+    def test_disabled_source_is_skipped(self):
+        config = make_config()
+        config.data["sources"]["broken"]["enabled"] = False
+        assert pipeline.select_sources(config) == ["fake"]
+
+
+class TestNotify:
+    def test_disabled_telegram_sends_nothing(self, storage):
+        FakeSource.batches = [[lot()]]
+        result = pipeline.run_once(make_config(), storage, only_sources=["fake"])
+        assert pipeline.notify(make_config(), storage, result) == 0
+
+    def test_dry_run_prints_instead_of_sending(self, storage, capsys):
+        FakeSource.batches = [[lot()]]
+        config = make_config()
+        config.data["telegram"]["enabled"] = True
+        result = pipeline.run_once(config, storage, only_sources=["fake"])
+
+        assert pipeline.notify(config, storage, result, dry_run=True) == 0
+        assert "Земельные тендеры Израиля" in capsys.readouterr().out
+
+    def test_csv_is_attached_when_enabled(self, storage, monkeypatch):
+        documents = []
+
+        class FakeNotifier:
+            def __init__(self, **kwargs):
+                pass
+
+            def send_blocks(self, blocks):
+                return 1
+
+            def send_document(self, path, caption=None):
+                documents.append((path.name, path.read_text("utf-8-sig"), caption))
+
+        monkeypatch.setattr("landtender.notify.TelegramNotifier", FakeNotifier)
+
+        FakeSource.batches = [[lot()]]
+        config = make_config()
+        config.data["telegram"].update({"enabled": True, "attach_csv": True})
+        result = pipeline.run_once(config, storage, only_sources=["fake"])
+        pipeline.notify(config, storage, result)
+
+        assert len(documents) == 1
+        name, content, caption = documents[0]
+        assert name.endswith(".csv")
+        assert "price_usd" in content
+        assert "Новые лоты" in caption
+
+    def test_csv_is_not_attached_when_disabled(self, storage, monkeypatch):
+        documents = []
+
+        class FakeNotifier:
+            def __init__(self, **kwargs):
+                pass
+
+            def send_blocks(self, blocks):
+                return 1
+
+            def send_document(self, path, caption=None):
+                documents.append(path)
+
+        monkeypatch.setattr("landtender.notify.TelegramNotifier", FakeNotifier)
+
+        FakeSource.batches = [[lot()]]
+        config = make_config()
+        config.data["telegram"].update({"enabled": True, "attach_csv": False})
+        result = pipeline.run_once(config, storage, only_sources=["fake"])
+        pipeline.notify(config, storage, result)
+
+        assert documents == []
+
+    def test_failed_csv_attachment_does_not_cancel_the_digest(self, storage, monkeypatch):
+        from landtender.notify import TelegramError
+
+        class FakeNotifier:
+            def __init__(self, **kwargs):
+                pass
+
+            def send_blocks(self, blocks):
+                return 1
+
+            def send_document(self, path, caption=None):
+                raise TelegramError("413 файл слишком большой")
+
+        monkeypatch.setattr("landtender.notify.TelegramNotifier", FakeNotifier)
+
+        FakeSource.batches = [[lot()]]
+        config = make_config()
+        config.data["telegram"].update({"enabled": True, "attach_csv": True})
+        result = pipeline.run_once(config, storage, only_sources=["fake"])
+
+        assert pipeline.notify(config, storage, result) == 1
+        # Лоты помечены отправленными, значит завтра не придут повторно
+        assert storage.was_notified(result.new_lots[0].uid, "new") is True
+
+    def test_already_notified_lots_are_not_resent(self, storage, monkeypatch):
+        sent_batches = []
+
+        class FakeNotifier:
+            def __init__(self, **kwargs):
+                pass
+
+            def send_blocks(self, blocks):
+                sent_batches.append(blocks)
+                return len(blocks)
+
+            def send_document(self, path, caption=None):
+                pass
+
+        monkeypatch.setattr("landtender.notify.TelegramNotifier", FakeNotifier)
+
+        FakeSource.batches = [[lot()]]
+        config = make_config()
+        config.data["telegram"]["enabled"] = True
+        result = pipeline.run_once(config, storage, only_sources=["fake"])
+
+        assert pipeline.notify(config, storage, result) > 0
+        # Повторная отправка того же результата уже ничего не шлёт
+        assert pipeline.notify(config, storage, result) == 0
+        assert len(sent_batches) == 1
+
+
+def test_stored_lots_roundtrip(storage):
+    FakeSource.batches = [[lot()]]
+    pipeline.run_once(make_config(), storage, only_sources=["fake"])
+    restored = pipeline.stored_lots(storage)
+    assert len(restored) == 1
+    assert restored[0].units == 60
+    assert restored[0].tier == TIER_PREMIUM
+
+
+class TestLandUseBackfill:
+    """Лоты, попавшие в базу до появления разбора назначения."""
+
+    def seed(self, storage, **overrides):
+        data = dict(purpose="חקלאות", tender_name="מכרז חקלאי", closing_date="2099-01-01")
+        data.update(overrides)
+        storage.upsert_lot(lot(**data), "2026-08-01")
+        storage.commit()
+
+    def test_missing_land_use_is_filled_in(self, storage):
+        self.seed(storage)
+        assert pipeline.backfill_land_use(storage) == 1
+        assert storage.get_lot_row("fake:1")["land_use"] == "agriculture"
+
+    def test_second_pass_has_nothing_left_to_do(self, storage):
+        self.seed(storage)
+        pipeline.backfill_land_use(storage)
+        assert pipeline.backfill_land_use(storage) == 0
+
+    def test_unrecognizable_purpose_stays_empty(self, storage):
+        self.seed(storage, purpose="מכרז 42", tender_name="מכרז 42")
+        assert pipeline.backfill_land_use(storage) == 0
+        assert storage.get_lot_row("fake:1")["land_use"] is None
+
+    def test_run_backfills_before_collecting(self, storage):
+        self.seed(storage)
+        FakeSource.batches = [[]]
+        pipeline.run_once(make_config(), storage, only_sources=["fake"])
+        assert storage.get_lot_row("fake:1")["land_use"] == "agriculture"
+
+
+class TestFarmlandLots:
+    def seed(self, storage, source_id, purpose, closing_date):
+        storage.upsert_lot(
+            lot(source_id=source_id, purpose=purpose, closing_date=closing_date), "2026-08-01"
+        )
+        storage.commit()
+        pipeline.backfill_land_use(storage)
+
+    def test_only_agricultural_lots_are_returned(self, storage):
+        self.seed(storage, "1", "חקלאות", "2099-01-01")
+        self.seed(storage, "2", "מגורים", "2099-01-01")
+        assert [l.source_id for l in pipeline.farmland_lots(storage)] == ["1"]
+
+    def test_expired_tenders_are_hidden_by_default(self, storage):
+        self.seed(storage, "1", "חקלאות", "2000-01-01")
+        assert pipeline.farmland_lots(storage) == []
+
+    def test_expired_tenders_can_be_included(self, storage):
+        self.seed(storage, "1", "חקלאות", "2000-01-01")
+        assert len(pipeline.farmland_lots(storage, only_active=False)) == 1
+
+
+class TestCollapsePlaceholders:
+    """Тендер без деталей и его же разобранные участки — один тендер, не два."""
+
+    def placeholder(self, tender_id="20250406"):
+        return lot(source_id=tender_id, tender_id=tender_id)
+
+    def plot(self, tender_id="20250406", key="10769/42"):
+        return lot(source_id=f"{tender_id}:{key}", tender_id=tender_id)
+
+    def test_placeholder_is_dropped_when_plots_exist(self):
+        kept = pipeline.collapse_placeholders([self.placeholder(), self.plot()])
+        assert [l.source_id for l in kept] == ["20250406:10769/42"]
+
+    def test_placeholder_survives_alone(self):
+        kept = pipeline.collapse_placeholders([self.placeholder()])
+        assert len(kept) == 1
+
+    def test_other_tenders_are_untouched(self):
+        lots = [self.placeholder("A"), self.plot("B", "1"), self.placeholder("B")]
+        kept = {l.source_id for l in pipeline.collapse_placeholders(lots)}
+        assert kept == {"A", "B:1"}
+
+    def test_lots_without_tender_id_are_kept(self):
+        # gov_mr не знает номера тендера — по нему группировать нечего
+        anonymous = lot(source_id="x", tender_id=None)
+        assert pipeline.collapse_placeholders([anonymous]) == [anonymous]
+
+    def test_same_id_in_another_source_is_not_confused(self):
+        lots = [
+            lot(source="fake", source_id="7", tender_id="7"),
+            lot(source="other", source_id="7:1", tender_id="7"),
+        ]
+        assert len(pipeline.collapse_placeholders(lots)) == 2
+
+    def test_stored_lots_applies_it(self, storage):
+        storage.upsert_lot(self.placeholder(), "2026-08-01")
+        storage.upsert_lot(self.plot(), "2026-08-01")
+        storage.commit()
+        assert len(pipeline.stored_lots(storage)) == 1
+
+
+class TestStaleLandUseIsCorrected:
+    """Значение, проставленное прошлой версией разбора, надо снимать."""
+
+    def seed_built(self, storage):
+        storage.upsert_lot(
+            lot(purpose="זאב חקלאי", tender_name="זאב חקלאי", renewal_kind="pinui_binui"),
+            "2026-08-01",
+        )
+        storage.commit()
+        # прошлая версия разбора не знала про вид работ
+        storage.set_land_use("fake:1", "agriculture")
+        storage.commit()
+
+    def test_backfill_clears_it(self, storage):
+        self.seed_built(storage)
+        pipeline.backfill_land_use(storage)
+        assert storage.get_lot_row("fake:1")["land_use"] is None
+
+    def test_farmland_no_longer_lists_it(self, storage):
+        self.seed_built(storage)
+        pipeline.backfill_land_use(storage)
+        assert pipeline.farmland_lots(storage, only_active=False) == []
+
+    def test_real_farmland_is_untouched(self, storage):
+        storage.upsert_lot(lot(source_id="2", purpose="קרקע חקלאית"), "2026-08-01")
+        storage.commit()
+        pipeline.backfill_land_use(storage)
+        assert storage.get_lot_row("fake:2")["land_use"] == "agriculture"
+
+
+class TestEnrichmentWiring:
+    """Дополнение включается конфигом и не роняет запуск при отказе сервиса."""
+
+    def config(self, **enrichment):
+        config = make_config()
+        config.data["enrichment"] = dict(enrichment)
+        return config
+
+    def test_disabled_by_default(self, storage):
+        assert pipeline.build_enricher(make_config(), object()) is None
+
+    def test_enabled_builds_an_enricher(self):
+        from tests.conftest import FakeHttp
+
+        enricher = pipeline.build_enricher(self.config(enabled=True, budget=7), FakeHttp({}))
+        assert enricher is not None
+        assert enricher.budget == 7
+
+    def test_signal_reaches_the_lot(self, storage, monkeypatch):
+        from landtender.invest import SIGNAL_CONFIRMED, Insight
+        from landtender.parcels import Parcel
+        from landtender.plans import Plan
+
+        leader = Plan(number="353-0061416", url="https://mavat.iplan.gov.il/x")
+        insight = Insight(
+            parcel=Parcel(gush="1", chelka="2", legal_area_sqm=90_000.0),
+            land_uses=[],
+            signal=SIGNAL_CONFIRMED,
+            leading_plan=leader,
+        )
+
+        class Fake:
+            def enrich(self, lot):
+                return insight
+
+        target = lot(gush="1", chelka="2", area_sqm=1.0)
+        pipeline._apply_insight(target, Fake())
+        assert target.plan_signal == SIGNAL_CONFIRMED
+        assert target.plan_number == "353-0061416"
+        assert target.area_sqm == 90_000.0
+
+    def test_broken_service_does_not_break_the_lot(self, storage):
+        class Broken:
+            def enrich(self, lot):
+                raise RuntimeError("портал недоступен")
+
+        target = lot(area_sqm=4200.0)
+        pipeline._apply_insight(target, Broken())
+        assert target.plan_signal is None
+        assert target.area_sqm == 4200.0
+
+
+
+def comparables_for(city="חיפה", n=30):
+    """Сравнимые сделки, на которых оценка действительно считается.
+
+    Пустой список сравнимых означает «оценки нет», а без оценки лот не
+    попадает в рейтинг — это и есть проверяемое правило, поэтому фикстуре
+    нужны настоящие сделки.
+    """
+    from landtender.valuation import collect_comparables
+
+    rows = []
+    for i in range(n):
+        area = 400.0 + i * 300
+        per_sqm = 9000 * area ** -0.25
+        rows.append(Lot(
+            source="rmi_michrazim", source_id=f"сделка-{i}", settlement=city,
+            area_sqm=area, price_nis=per_sqm * area, price_kind="final",
+            closing_date="2025-06-01",
+        ))
+    return collect_comparables(rows)
+
+
+class TestTopLots:
+    """Топ строится на сегодняшних сравнимых, а не на числах дня загрузки.
+
+    Балл и оценка кладутся в базу при загрузке лота. База сравнимых сделок с
+    тех пор выросла с десяти записей до пятнадцати тысяч, поэтому рейтинг по
+    сохранённым числам сравнивал бы лоты по разным меркам — тот, что попал в
+    базу раньше, проигрывал бы не по существу, а по дате.
+    """
+
+    def config(self):
+        config = make_config()
+        config.data.setdefault("valuation", {})["estimate"] = True
+        return config
+
+    def store(self, storage, lots):
+        for item in lots:
+            storage.upsert_lot(item, "2026-08-30T00:00:00+00:00")
+
+    def test_stale_scores_are_recomputed(self, storage, monkeypatch):
+        """Сохранённый балл не должен решать место в рейтинге."""
+        self.store(storage, [
+            lot(source_id="устаревший", score_total=99.0, area_sqm=1000.0,
+                settlement="חיפה", closing_date="2027-01-01"),
+            lot(source_id="свежий", score_total=1.0, area_sqm=1000.0,
+                settlement="חיפה", closing_date="2027-01-01"),
+        ])
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: comparables_for())
+        top = pipeline.top_lots(self.config(), object(), storage, limit=10)
+        assert all(item.score_total != 99.0 for item in top)
+
+    def test_lots_without_a_price_are_left_out(self, storage, monkeypatch):
+        """Рейтинг предложений отвечает на «что брать и почём».
+
+        В первом прогоне на настоящей базе два верхних места заняли тендеры,
+        у которых приём заявок ещё не открыт: портал держит минимальную цену
+        пустой до открытия. Балл они набрали на плотности и сроке, а купить
+        по ним нечего.
+        """
+        self.store(storage, [
+            lot(source_id="без цены", price_nis=None, area_sqm=1000.0, units=40,
+                settlement="חיפה", closing_date="2027-01-01"),
+            lot(source_id="с ценой", price_nis=5_000_000.0, area_sqm=1000.0, units=40,
+                settlement="חיפה", closing_date="2027-01-01"),
+        ])
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: comparables_for())
+        ids = {item.source_id for item in pipeline.top_lots(self.config(), object(), storage)}
+        assert ids == {"с ценой"}
+
+    def test_lots_without_a_score_are_left_out(self, storage, monkeypatch):
+        """Место в рейтинге без основания — это не место, а отсутствие ответа."""
+        self.store(storage, [lot(source_id="без данных", price_nis=None, units=None)])
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: [])
+        assert pipeline.top_lots(self.config(), object(), storage) == []
+
+    def test_expired_tenders_are_hidden_by_default(self, storage, monkeypatch):
+        self.store(storage, [
+            lot(source_id="просрочен", closing_date="2020-01-01", area_sqm=1000.0,
+                settlement="חיפה"),
+            lot(source_id="открыт", closing_date="2027-01-01", area_sqm=1000.0,
+                settlement="חיפה"),
+        ])
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: comparables_for())
+        ids = {item.source_id for item in pipeline.top_lots(self.config(), object(), storage)}
+        assert "просрочен" not in ids
+
+    def test_closed_tenders_can_be_included(self, storage, monkeypatch):
+        self.store(storage, [lot(source_id="просрочен", closing_date="2020-01-01",
+                                 area_sqm=1000.0, settlement="חיפה")])
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: comparables_for())
+        top = pipeline.top_lots(self.config(), object(), storage, only_active=False)
+        assert [item.source_id for item in top] == ["просрочен"]
+
+    def test_limit_is_respected_and_order_is_by_score(self, storage, monkeypatch):
+        self.store(storage, [
+            lot(source_id=str(i), units=i * 10, area_sqm=1000.0, settlement="חיפה",
+                closing_date="2027-01-01")
+            for i in range(1, 6)
+        ])
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: comparables_for())
+        top = pipeline.top_lots(self.config(), object(), storage, limit=3)
+        assert len(top) == 3
+        scores = [item.score_total for item in top]
+        assert scores == sorted(scores, reverse=True)
+
+
+class TestPriceIndicatorIsMandatory:
+    """Рейтинг обязан опираться на сравнение цены с рынком.
+
+    Без показателя цены балл считается по «бесплатным» слагаемым — сроку
+    подачи и плотности. На настоящей базе это дало десять первых мест с
+    баллом 100, посчитанным по одному показателю: наверх вышли лоты, о
+    которых известно меньше всего. Ранжировать полноту наших сведений вместо
+    самих предложений — не то, ради чего рейтинг существует.
+    """
+
+    def config(self):
+        config = make_config()
+        config.data.setdefault("valuation", {})["estimate"] = True
+        return config
+
+    def test_a_lot_without_an_estimate_never_places(self, storage, monkeypatch):
+        storage.upsert_lot(
+            lot(source_id="без оценки", settlement=None, area_sqm=1000.0,
+                units=40, price_nis=5_000_000.0, closing_date="2027-01-01"),
+            "2026-08-30T00:00:00+00:00",
+        )
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: comparables_for())
+        assert pipeline.top_lots(self.config(), object(), storage) == []
+
+    def test_a_lot_with_an_estimate_places(self, storage, monkeypatch):
+        storage.upsert_lot(
+            lot(source_id="с оценкой", settlement="חיפה", area_sqm=1000.0,
+                units=40, price_nis=5_000_000.0, closing_date="2027-01-01"),
+            "2026-08-30T00:00:00+00:00",
+        )
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: comparables_for())
+        top = pipeline.top_lots(self.config(), object(), storage)
+        assert [item.source_id for item in top] == ["с оценкой"]
+        assert top[0].score_price is not None
+
+
+class TestOnePerTender:
+    """Десять строк про одно предложение — это не десять предложений.
+
+    В первом рабочем рейтинге восемь мест из десяти занял тендер 386/2018:
+    его участки почти одинаковы — 379-403 м², по одной единице, оценка около
+    двух миллионов у каждого.
+    """
+
+    def config(self):
+        config = make_config()
+        config.data.setdefault("valuation", {})["estimate"] = True
+        return config
+
+    def fill(self, storage, lots):
+        for item in lots:
+            storage.upsert_lot(item, "2026-08-30T00:00:00+00:00")
+
+    def test_only_the_best_plot_of_a_tender_places(self, storage, monkeypatch):
+        self.fill(storage, [
+            lot(source_id=f"участок-{i}", tender_id="20180386", settlement="חיפה",
+                area_sqm=400.0, units=1, price_nis=200_000.0 + i * 1000,
+                closing_date="2027-01-01")
+            for i in range(8)
+        ])
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: comparables_for())
+        top = pipeline.top_lots(self.config(), object(), storage)
+        assert len(top) == 1
+
+    def test_different_tenders_all_place(self, storage, monkeypatch):
+        self.fill(storage, [
+            lot(source_id=f"л-{i}", tender_id=f"2018038{i}", settlement="חיפה",
+                area_sqm=400.0, units=1, price_nis=200_000.0, closing_date="2027-01-01")
+            for i in range(4)
+        ])
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: comparables_for())
+        assert len(pipeline.top_lots(self.config(), object(), storage)) == 4
+
+
+class TestClosedDealsAreNotOffers:
+    """Цена сделки — то, что победитель уже заплатил, а не предложение."""
+
+    def config(self):
+        config = make_config()
+        config.data.setdefault("valuation", {})["estimate"] = True
+        return config
+
+    def test_a_final_price_keeps_the_lot_out(self, storage, monkeypatch):
+        storage.upsert_lot(
+            lot(source_id="продано", tender_id="1", settlement="חיפה", area_sqm=400.0,
+                units=1, price_nis=500_000.0, price_kind="final",
+                closing_date="2027-01-01"),
+            "2026-08-30T00:00:00+00:00",
+        )
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: comparables_for())
+        assert pipeline.top_lots(self.config(), object(), storage) == []
+
+    def test_a_minimum_price_is_an_offer(self, storage, monkeypatch):
+        storage.upsert_lot(
+            lot(source_id="торгуется", tender_id="1", settlement="חיפה", area_sqm=400.0,
+                units=1, price_nis=500_000.0, price_kind="min",
+                closing_date="2027-01-01"),
+            "2026-08-30T00:00:00+00:00",
+        )
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: comparables_for())
+        assert len(pipeline.top_lots(self.config(), object(), storage)) == 1
+
+
+class TestCityLots:
+    """Срез по городу: написание города не должно решать судьбу лота."""
+
+    def fill(self, storage, lots):
+        for item in lots:
+            storage.upsert_lot(item, "2026-08-30T00:00:00+00:00")
+
+    def test_any_spelling_of_the_city_matches(self, storage):
+        self.fill(storage, [
+            lot(source_id="1", settlement="ירושלים", purpose="מגורים",
+                price_usd=500_000.0, closing_date="2027-01-01"),
+        ])
+        for spelling in ("Иерусалим", "ירושלים", "Jerusalem"):
+            found = pipeline.city_lots(storage, city=spelling)
+            assert [item.source_id for item in found] == ["1"], spelling
+
+    def test_other_cities_are_left_out(self, storage):
+        self.fill(storage, [
+            lot(source_id="иерусалим", settlement="ירושלים", purpose="מגורים",
+                price_usd=100.0, closing_date="2027-01-01"),
+            lot(source_id="хайфа", settlement="חיפה", purpose="מגורים",
+                price_usd=100.0, closing_date="2027-01-01"),
+        ])
+        found = pipeline.city_lots(storage, city="Иерусалим")
+        assert [item.source_id for item in found] == ["иерусалим"]
+
+    def test_purpose_matches_by_substring(self, storage):
+        """Портал пишет назначение свободным текстом: «מגורים ומסחר» — тоже жильё."""
+        self.fill(storage, [
+            lot(source_id="смешанное", settlement="ירושלים", purpose="מגורים ומסחר",
+                price_usd=100.0, closing_date="2027-01-01"),
+            lot(source_id="торговля", settlement="ירושלים", purpose="מסחר",
+                price_usd=100.0, closing_date="2027-01-01"),
+        ])
+        found = pipeline.city_lots(storage, city="Иерусалим", purpose="מגורים")
+        assert [item.source_id for item in found] == ["смешанное"]
+
+    def test_the_price_ceiling_applies(self, storage):
+        self.fill(storage, [
+            lot(source_id="дешёвый", settlement="ירושלים", purpose="מגורים",
+                price_usd=900_000.0, closing_date="2027-01-01"),
+            lot(source_id="дорогой", settlement="ירושלים", purpose="מגורים",
+                price_usd=1_500_000.0, closing_date="2027-01-01"),
+        ])
+        found = pipeline.city_lots(storage, city="Иерусалим", max_usd=1_000_000)
+        assert [item.source_id for item in found] == ["дешёвый"]
+
+    def test_expired_tenders_are_hidden(self, storage):
+        self.fill(storage, [
+            lot(source_id="просрочен", settlement="ירושלים", purpose="מגורים",
+                price_usd=100.0, closing_date="2020-01-01"),
+        ])
+        assert pipeline.city_lots(storage, city="Иерусалим") == []
+
+
+class TestAuctionPremiumReachesTheLots:
+    """Надбавка из архива доходит до действующих лотов — иначе она бесполезна."""
+
+    def archive(self, n=40, ratio=1.4):
+        """Закрытые торги: с чего начали и чем кончились."""
+        return [
+            lot(
+                source_id=f"archive-{i}",
+                price_nis=1_000_000.0 * ratio,
+                price_kind="final",
+                reserve_price_nis=1_000_000.0,
+                area_sqm=1000.0,
+                closing_date="2025-06-01",
+            )
+            for i in range(n)
+        ]
+
+    def fill(self, storage, rows):
+        for row in rows:
+            storage.upsert_lot(row, "2026-09-01T00:00:00Z")
+        storage.commit()
+
+    def test_start_price_becomes_an_expected_deal(self, storage):
+        self.fill(storage, self.archive())
+        active = lot(source_id="active", price_nis=2_000_000.0, price_kind="min",
+                     reserve_price_nis=2_000_000.0)
+
+        evaluated = pipeline.evaluate_lots(make_config(), object(), storage, [active])
+        assert evaluated[0].expected_price_nis == pytest.approx(2_800_000.0)
+
+    def test_a_closed_deal_is_not_raised_again(self, storage):
+        """Цена сделки уже случилась — поднимать её надбавкой нечем."""
+        self.fill(storage, self.archive())
+        done = lot(source_id="done", price_nis=2_000_000.0, price_kind="final")
+
+        evaluated = pipeline.evaluate_lots(make_config(), object(), storage, [done])
+        assert evaluated[0].expected_price_nis is None
+
+    def test_empty_archive_leaves_the_start_price_alone(self, storage):
+        """Без пар подставлять множитель нельзя: единица — тоже утверждение."""
+        active = lot(source_id="active", price_nis=2_000_000.0, price_kind="min",
+                     reserve_price_nis=2_000_000.0)
+
+        evaluated = pipeline.evaluate_lots(make_config(), object(), storage, [active])
+        assert evaluated[0].expected_price_nis is None
+
+    def test_both_prices_survive_the_database(self, storage):
+        """Колонка без миграции стоила бы всей истории уведомлений."""
+        self.fill(storage, [lot(source_id="pair", price_nis=3_610_000.0,
+                                price_kind="final", reserve_price_nis=2_900_000.0)])
+        stored = {row.source_id: row for row in pipeline.stored_lots(storage)}
+        assert stored["pair"].reserve_price_nis == 2_900_000.0
+        assert stored["pair"].price_nis == 3_610_000.0

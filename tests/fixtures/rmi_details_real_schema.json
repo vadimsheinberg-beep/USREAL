@@ -1,0 +1,55 @@
+{
+  "MichrazID": 20260123,
+  "MichrazName": "חי/123/2026",
+  "MechirSafMichraz": null,
+  "MechirSafType": 3,
+  "SchumArvut": 250000,
+  "TokefArvut": "2026-09-30T00:00:00+03:00",
+  "Uchlusiyot": [],
+  "mpHatzaaotMichraz": [],
+  "Tik": [
+    {
+      "MichrazID": 20260123,
+      "TikID": "70113195א",
+      "MitchamName": "4",
+      "Shetach": 4200,
+      "ShetachBniya": 9800,
+      "Kibolet": 60,
+      "HotzaotPituach": 3400000,
+      "MechirSaf": 18500000,
+      "mechirShuma": 19100000,
+      "SchumArvut": 1850000,
+      "ShemZoche": null,
+      "SchumZchiya": null,
+      "MechirMaximum": null,
+      "TochnitMigrash": [
+        {"Tochnit": "420/1/3/5", "MigrashName": "4", "TochnitMigrashID": 289049}
+      ],
+      "GushHelka": [{"Gush": "10769", "Helka": "42"}]
+    },
+    {
+      "MichrazID": 20260123,
+      "TikID": "70113196ב",
+      "Shetach": 1850,
+      "Kibolet": 24,
+      "HotzaotPituach": 900000,
+      "MechirSaf": 2900000,
+      "mechirShuma": 3050000,
+      "SchumArvut": 290000,
+      "ShemZoche": "חברת בנייה בע\"מ",
+      "SchumZchiya": 3610000,
+      "GushHelka": [{"Gush": "10769", "Helka": "43"}]
+    }
+  ],
+  "MichrazDocList": [
+    {
+      "MichrazID": 20260123,
+      "FileType": "application/pdf",
+      "RowID": 129714,
+      "Teur": "חוברת מכרז",
+      "DocName": "חוברת מכרז.pdf",
+      "UpdateDate": "2026-07-13T00:00:00+03:00",
+      "Url": null
+    }
+  ]
+}

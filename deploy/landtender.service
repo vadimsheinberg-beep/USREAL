@@ -1,0 +1,25 @@
+[Unit]
+Description=Ежедневный сбор земельных тендеров Израиля
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=landtender
+Group=landtender
+WorkingDirectory=/opt/landtender
+# Токены держите в файле с правами 640 (root:landtender), а не в юните
+EnvironmentFile=/etc/landtender.env
+ExecStart=/opt/landtender/.venv/bin/landtender --config /opt/landtender/landtender.toml run
+# Порталы отвечают медленно, а детали тендеров догружаются с паузой
+TimeoutStartSec=3600
+
+# Программе достаточно писать только в свой каталог данных
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/landtender/data
+
+[Install]
+WantedBy=multi-user.target

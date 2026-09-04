@@ -1,0 +1,388 @@
+"""Разведка трёх карт-сервисов: govmap, iplan (мавъат) и nadlan.
+
+Те же грабли, что с рм"י: имена слоёв и полей нельзя угадать, их надо
+увидеть. Модуль ничего не сохраняет и никуда не отправляет — только печатает,
+что порталы реально отдают, чтобы источники писались по фактам.
+
+Знание об эндпоинтах взято из двух MIT-проектов:
+  * ``ags.iplan.gov.il/arcgisiplan`` — meirim-org/meirim (server/api/lib/iplanApi.js);
+  * ``data.nadlan.gov.il/api`` — Etelis/nadlan-mcp.
+WFS govmap описан его же GetCapabilities.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from .http import HttpClient, HttpError
+
+# ---------------------------------------------------------------- govmap ----
+
+#: Открытый WFS Геосервер govmap: участки, гуши, нахалот, границы муниципалитетов.
+#: Отдаёт GeoJSON без авторизации, координаты в EPSG:2039 (израильская сеть ITM).
+GOVMAP_WFS = "https://open.govmap.gov.il/geoserver/opendata/wfs"
+
+#: Автодополнение адресов и «гуш/хелка» — резолвер для человеческого ввода.
+GOVMAP_SEARCH = "https://es.govmap.gov.il/TldSearch/api/AutoComplete"
+
+# ----------------------------------------------------------------- iplan ----
+
+#: Национальный реестр планов (מבא"ת) как обычный ArcGIS REST.
+#:
+#: Слои — увидены разведкой, не угаданы:
+#:   0  ישויות נקודתיות      точечные объекты планов
+#:   1  קוים כחולים          «синие линии» — сами планы, 50 полей
+#:   2  ישויות קוויות        линейные объекты
+#:   3  ישויות פוליגונליות   полигональные объекты
+#:   4  יעודי קרקע           НАЗНАЧЕНИЯ ЗЕМЛИ по ячейкам площади
+#:
+#: Сервер требует старый набор шифров: на обычный ClientHello отвечает
+#: SSLV3_ALERT_HANDSHAKE_FAILURE (см. HttpClient.use_legacy_tls).
+IPLAN_XPLAN = (
+    "https://ags.iplan.gov.il/arcgisiplan/rest/services/PlanningPublic/Xplan/MapServer"
+)
+
+#: Слой планов и слой назначений земли.
+IPLAN_PLANS_LAYER = 1
+IPLAN_LANDUSE_LAYER = 4
+
+#: Поля слоя планов, ради которых всё затевалось (подписи — из самого сервиса).
+#:
+#: ``pl_objectives`` — текст целей плана; именно там пишут
+#: «שינוי במערך יעודי הקרקע ... מחקלאי למגורים», то есть смену назначения.
+#: ``quantity_delta_120`` — насколько план меняет число квартир: у пустого
+#: сельхозполя, которое переводят под застройку, это число большое.
+IPLAN_PLAN_FIELDS = (
+    "pl_number",              # מספר תכנית
+    "pl_name",                # שם תכנית
+    "pl_url",                 # קישור לאתר מידע תכנוני
+    "mp_id",                  # מזהה תכנית ראשי
+    "pl_landuse_string",      # סוג ייעוד קרקע
+    "pl_objectives",          # מטרות
+    "internet_short_status",  # שלב תכנוני: «פרסום הפקדה» / «פרסום אישור»
+    "station_desc",           # תיאור סטטוס
+    "entity_subtype_desc",    # תת-סוג תכנית
+    "plan_county_name",       # שם יישוב
+    "district_name",          # שם מחוז
+    "jurstiction_area_name",  # תחום גבול שיפוט
+    "pl_area_dunam",          # שטח תכנית בדונם
+    "quantity_delta_120",     # שינוי מס' יח' דיור
+    "pq_authorised_quantity_120",  # מגורים מאושר יח"ד
+    "quantity_delta_125",     # שינוי שטח דיור מ"ר
+    "quantity_delta_60",      # שינוי בשטח מבני תעסוקה מ"ר
+    "quantity_delta_75",      # שינוי בשטח מבני מסחר מ"ר
+    "depositing_date",        # תאריך דיון בהפקדה
+    "pl_last_deposit_date",   # תאריך אחרון להפקדה
+    "pl_date_advertise",      # תאריך פרסום בעיתונים
+    "pl_date_8",              # תאריך פרסום ברשומות
+    "receiving_date",         # תאריך קבלת תכנית
+)
+
+#: Поля слоя назначений земли.
+IPLAN_LANDUSE_FIELDS = (
+    "mavat_code",   # קוד מבא"ת
+    "mavat_name",   # שם ייעוד קרקע — «קרקע חקלאית», «מגורים א'» и т.п.
+    "legal_area",   # שטח רשום דונם
+    "num",          # מזהה תא שטח
+    "pl_number",
+    "pl_name",
+    "mp_id",
+    "station_desc",
+)
+
+# ---------------------------------------------------------------- nadlan ----
+
+#: Статические JSON рынка недвижимости. Без авторизации.
+#: Динамический api.nadlan.gov.il/deal-data закрыт reCAPTCHA Enterprise —
+#: он сознательно не трогается: обход защиты доступа нам не нужен.
+NADLAN_DATA = "https://data.nadlan.gov.il/api"
+
+#: CDN отвечает 403 на запрос без происхождения — ровно как портал рм"י.
+#: Это не обход авторизации: заголовки лишь заявляют, чьей страницей мы
+#: притворяемся, а сами файлы отдаются кому угодно с такими заголовками.
+NADLAN_HEADERS = {
+    "Origin": "https://www.nadlan.gov.il",
+    "Referer": "https://www.nadlan.gov.il/",
+    "Accept": "application/json, text/plain, */*",
+}
+
+# ------------------------------------------------- макропоказатели ----------
+
+#: Центральное статбюро (למ"ס). Публичный API по индексам и временным рядам.
+#: Требует заголовка User-Agent — без него отвечает отказом.
+CBS_INDEX_DATA = "https://api.cbs.gov.il/index/data/price"
+CBS_INDEX_CATALOG = "https://api.cbs.gov.il/index/catalog/catalog"
+
+#: Коды индексов, которые имеют отношение к земле. Проверяются разведкой:
+#: если код не тот, ответ будет пустым и это сразу видно.
+CBS_INDEX_CANDIDATES = {
+    "120010": 'מדד המחירים לצרכן — ИПЦ',
+    "200010": 'מדד מחירי הדירות — цены квартир',
+    "160010": 'מדד תשומות הבנייה — затраты на строительство',
+}
+
+#: Банк Израиля. Курс мы уже берём отсюда же, хост в CI доступен.
+BOI_SERIES = "https://edge.boi.gov.il/FusionEdgeServer/sdmx/v2/data/dataflow/BOI.STATISTICS/SERIES"
+BOI_PUBLIC_API = "https://www.boi.org.il/PublicApi"
+
+MAX_JSON_CHARS = 2500
+
+
+def _fmt(value: Any, limit: int = MAX_JSON_CHARS) -> str:
+    text = json.dumps(value, ensure_ascii=False, indent=2, default=str)
+    if len(text) > limit:
+        return text[:limit] + f"\n… (обрезано, всего {len(text)} символов)"
+    return text
+
+
+def _head(title: str) -> None:
+    print("\n" + "=" * 72)
+    print(title)
+    print("=" * 72)
+
+
+# ============================================================== iplan =======
+
+
+#: Куда ещё мог переехать сервис. Путь ArcGIS у ведомств отличается
+#: (``/arcgisiplan/`` против обычного ``/arcgis/``), а имя сервиса менялось.
+IPLAN_VARIANTS: tuple[str, ...] = (
+    IPLAN_XPLAN,
+    "https://ags.iplan.gov.il/arcgis/rest/services/PlanningPublic/Xplan/MapServer",
+    "https://ags.iplan.gov.il/arcgisiplan/rest/services/PlanningPublic/XplanPublic/MapServer",
+    "https://ags.iplan.gov.il/arcgisiplan/rest/services/PlanningPublic/Xplan/FeatureServer",
+)
+
+
+def _reach_iplan(http: HttpClient) -> tuple[str, Any] | None:
+    """Находит рабочий адрес сервиса, пробуя обычный TLS и старый набор шифров.
+
+    Сервер отвечал ``SSLV3_ALERT_HANDSHAKE_FAILURE``, поэтому проверяем не
+    только адреса, но и настройку TLS — иначе непонятно, что именно сломано:
+    адрес, шифры или сам сервис.
+    """
+    for legacy in (False, True):
+        if legacy:
+            print("\n… обычный TLS не прошёл, пробую старый набор шифров")
+            http.use_legacy_tls("https://ags.iplan.gov.il")
+        for url in IPLAN_VARIANTS:
+            try:
+                data = http.get_json(url, params={"f": "json"})
+            except HttpError as exc:
+                print(f"  ✗ {url}\n      {exc}")
+                continue
+            if isinstance(data, dict) and data.get("error"):
+                print(f"  ✗ {url} → ошибка сервиса: {data['error']}")
+                continue
+            print(f"  ✓ {url}" + (" (старый TLS)" if legacy else ""))
+            return url, data
+    return None
+
+
+def inspect_iplan(http: HttpClient, gush: str | None = None) -> int:
+    """Слои реестра планов и настоящие имена их полей.
+
+    Ради этого всё и затевается: план, меняющий назначение участка с
+    сельхоза на жильё, — единственное, что превращает дешёвую землю в дорогую.
+    """
+    _head("РАЗВЕДКА IPLAN (реестр планов, ArcGIS REST)")
+
+    reached = _reach_iplan(http)
+    if reached is None:
+        print("\n✗ Ни один адрес сервиса не ответил.")
+        return 1
+    base, service = reached
+
+    layers = (service or {}).get("layers") or []
+    print(f"\nСлоёв в сервисе: {len(layers)}")
+    for layer in layers:
+        print(f"  [{layer.get('id')}] {layer.get('name')} — {layer.get('geometryType')}")
+
+    if not layers:
+        print("✗ Список слоёв пуст — схема сервиса изменилась.")
+        return 1
+
+    for layer in layers:
+        layer_id = layer.get("id")
+        print("\n" + "-" * 72)
+        print(f"Слой {layer_id}: {layer.get('name')}")
+        try:
+            meta = http.get_json(f"{base}/{layer_id}", params={"f": "json"})
+        except HttpError as exc:
+            print(f"  ✗ описание недоступно: {exc}")
+            continue
+
+        fields = [(f.get("name"), f.get("type"), f.get("alias")) for f in (meta.get("fields") or [])]
+        print(f"  Полей: {len(fields)}")
+        for name, ftype, alias in fields:
+            print(f"    {name:<28} {str(ftype).replace('esriFieldType', ''):<12} {alias or ''}")
+
+    # Одна живая запись из слоя планов: по ней видно и формат значений,
+    # и что вообще лежит в статусе и назначении.
+    print("\n" + "-" * 72)
+    print("Пример записи из слоя планов")
+    params = {
+        "f": "json",
+        "outFields": "*",
+        "returnGeometry": "false",
+        "resultRecordCount": 2,
+        "where": f"gush_num={gush}" if gush else "objectid>0",
+    }
+    try:
+        sample = http.get_json(f"{base}/1/query", params=params)
+    except HttpError as exc:
+        print(f"  ✗ запрос не прошёл: {exc}")
+        return 1
+
+    features = (sample or {}).get("features") or []
+    print(f"  Найдено: {len(features)}")
+    for feature in features[:2]:
+        print(_fmt(feature.get("attributes")))
+    return 0
+
+
+# ============================================================== govmap ======
+
+
+def inspect_govmap(http: HttpClient, gush: str | None = None, helka: str | None = None) -> int:
+    """Типы объектов открытого WFS и поля участка.
+
+    Участок по гуш/хелка даёт полигон и площадь — то, чего нет в тендере,
+    когда портал рм"י оставляет ``Shetach`` пустым.
+    """
+    _head("РАЗВЕДКА GOVMAP (открытый WFS)")
+
+    try:
+        caps = http.get_text(
+            GOVMAP_WFS,
+            params={"service": "wfs", "version": "2.0.0", "request": "GetCapabilities"},
+        )
+    except HttpError as exc:
+        print(f"✗ GetCapabilities не отвечает: {exc}")
+        return 1
+
+    # Разбирать XML целиком незачем — нужны только имена типов объектов.
+    names = _feature_type_names(caps)
+    print(f"\nТипов объектов: {len(names)}")
+    for name in names:
+        print(f"  {name}")
+
+    target = "opendata:PARCEL_ALL"
+    where = None
+    if gush and helka:
+        where = f"GUSH_NUM={gush} AND PARCEL={helka}"
+    print("\n" + "-" * 72)
+    print(f"Пример записи: {target}" + (f" ({where})" if where else ""))
+
+    params = {
+        "service": "WFS",
+        "version": "2.0.0",
+        "request": "GetFeature",
+        "typeNames": target,
+        "count": "2",
+        "outputFormat": "application/json",
+    }
+    if where:
+        params["cql_filter"] = where
+
+    try:
+        data = http.get_json(GOVMAP_WFS, params=params)
+    except HttpError as exc:
+        print(f"  ✗ запрос не прошёл: {exc}")
+        return 1
+
+    features = (data or {}).get("features") or []
+    print(f"  Найдено: {len(features)} · CRS: {(data or {}).get('crs')}")
+    for feature in features[:2]:
+        print("  Поля:", list((feature.get("properties") or {}).keys()))
+        print(_fmt(feature.get("properties"), 1200))
+    return 0
+
+
+def _feature_type_names(capabilities: str) -> list[str]:
+    """Имена типов объектов из GetCapabilities без разбора всего XML."""
+    import re
+
+    return sorted(set(re.findall(r"<Name>([^<]+)</Name>", capabilities)))
+
+
+# ============================================================== nadlan ======
+
+
+def inspect_nadlan(http: HttpClient, settlement_code: str = "5000") -> int:
+    """Статические справочники рынка. По умолчанию — Тель-Авив (код 5000)."""
+    _head("РАЗВЕДКА NADLAN (статические JSON)")
+    print(
+        "\nДинамический api.nadlan.gov.il/deal-data закрыт reCAPTCHA Enterprise "
+        "и здесь сознательно не трогается."
+    )
+
+    probes = (
+        ("справочник населённых пунктов", f"{NADLAN_DATA}/index/setl_types.json"),
+        ("коды типов недвижимости", f"{NADLAN_DATA}/index/dealNatureIndex.json"),
+        ("страница НП (покупка)", f"{NADLAN_DATA}/pages/settlement/buy/{settlement_code}.json"),
+    )
+
+    ok = 0
+    for title, url in probes:
+        print("\n" + "-" * 72)
+        print(f"{title}: {url}")
+        try:
+            data = http.get_json(url, headers=NADLAN_HEADERS)
+        except HttpError as exc:
+            print(f"  ✗ {exc}")
+            continue
+        ok += 1
+        if isinstance(data, dict):
+            print(f"  Ключи верхнего уровня: {sorted(data.keys())[:40]}")
+            first = next(iter(data.items()), None)
+            if first is not None:
+                print(f"  Первый элемент [{first[0]}]:")
+                print(_fmt(first[1], 1200))
+        elif isinstance(data, list):
+            print(f"  Записей: {len(data)}")
+            if data:
+                print(_fmt(data[0], 1200))
+    return 0 if ok else 1
+
+
+# ========================================================== макро ===========
+
+
+def inspect_macro(http: HttpClient) -> int:
+    """Показатели, которые обновляются регулярно и влияют на цену земли.
+
+    Проверяем не наличие сайта, а то, что API реально отдаёт числа и в каком
+    виде: индекс строительных затрат, к которому привязаны платежи по
+    тендерам рм"и, полезен только если его можно прочитать программно.
+    """
+    _head("РАЗВЕДКА МАКРОПОКАЗАТЕЛЕЙ (למ\"ס, בנק ישראל)")
+
+    ok = 0
+    print("\nЦентральное статбюро — индексы:")
+    for code, title in CBS_INDEX_CANDIDATES.items():
+        print("\n" + "-" * 72)
+        print(f"{title}  (id={code})")
+        try:
+            data = http.get_json(
+                CBS_INDEX_DATA,
+                params={"id": code, "format": "json", "download": "false", "last": "3"},
+            )
+        except HttpError as exc:
+            print(f"  ✗ {exc}")
+            continue
+        ok += 1
+        print(f"  Ключи ответа: {sorted(data.keys()) if isinstance(data, dict) else type(data)}")
+        print(_fmt(data, 1500))
+
+    print("\n" + "-" * 72)
+    print(f"Каталог индексов: {CBS_INDEX_CATALOG}")
+    try:
+        catalog = http.get_json(CBS_INDEX_CATALOG, params={"format": "json", "download": "false"})
+        print(_fmt(catalog, 1200))
+        ok += 1
+    except HttpError as exc:
+        print(f"  ✗ {exc}")
+
+    return 0 if ok else 1

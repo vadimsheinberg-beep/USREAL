@@ -1,0 +1,18 @@
+{
+  "MichrazID": 20250143,
+  "MichrazName": "מר/143/2025",
+  "Yishuv": "מודיעין",
+  "KodYeudMichraz": 1,
+  "Tik": {
+    "Migrashim": [
+      {
+        "MigrashNumber": "1",
+        "Gush": "5599",
+        "Chelka": "18",
+        "Area": 520.0,
+        "MinPrice": 1450000.0,
+        "Yeud": "מגרש לבניית בית קרקע"
+      }
+    ]
+  }
+}

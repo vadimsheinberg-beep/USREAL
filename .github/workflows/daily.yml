@@ -1,0 +1,258 @@
+name: Ежедневный сбор тендеров
+
+on:
+  schedule:
+    # 06:00 UTC = 09:00 по Израилю летом
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Прогон без отправки в Telegram"
+        type: boolean
+        default: false
+      send_farmland:
+        description: "Прислать в канал срез по всей сельхозземле"
+        type: boolean
+        default: false
+      full_refresh:
+        description: "Перезабрать детали всех тендеров (цены и площади)"
+        type: boolean
+        default: false
+      harvest:
+        description: "Собрать архив закрытых торгов — база сравнимых сделок"
+        type: boolean
+        default: false
+      harvest_refresh:
+        description: "Перезабрать уже собранный архив (нужно один раз — ради минимальных цен закрытых торгов)"
+        type: boolean
+        default: false
+      send_city:
+        description: "Прислать в канал срез по Иерусалиму"
+        type: boolean
+        default: true
+      send_top:
+        description: "Прислать в канал топ-10 предложений"
+        type: boolean
+        default: true
+      send_all:
+        description: "Прислать в канал полную выгрузку со всеми показателями"
+        type: boolean
+        default: true
+      all_limit:
+        description: "Сколько строк листинга слать в канал (0 — ни одной, только CSV)"
+        type: string
+        default: "0"
+      send_summary:
+        description: "Прислать сводку одним сообщением"
+        type: boolean
+        default: true
+      cadastre:
+        description: "Прогнать кадастр govmap по накопленной базе"
+        type: boolean
+        default: false
+      cadastre_minutes:
+        description: "Сколько минут добирать площади из кадастра"
+        type: string
+        default: "120"
+      harvest_minutes:
+        description: "Сколько минут собирать архив (лимит задания — 180 минут)"
+        type: string
+        default: "165"
+
+concurrency:
+  group: landtender-daily
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    # Шесть часов — потолок GitHub для задания; берём половину. Ежедневному
+    # сбору хватает и минуты, длинный лимит нужен архиву: сбор ограничен
+    # собственными часами (--minutes) и завершается сам, а лимит задания —
+    # аварийный предохранитель, при срабатывании которого база не сохраняется.
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Установить зависимости
+        run: pip install -e .
+
+      - name: Восстановить базу с прошлого запуска
+        uses: actions/cache@v4
+        with:
+          path: data
+          # Ключ меняем только когда меняется смысл идентификаторов лотов:
+          # новые колонки база теперь дописывает сама (см. Storage._migrate),
+          # а сброс кеша стоил бы истории уведомлений — все лоты уехали бы в
+          # Telegram повторно.
+          key: landtender-db-v4-${{ github.run_id }}
+          restore-keys: landtender-db-v4-
+
+      - name: Собрать конфиг
+        run: cp landtender.example.toml landtender.toml
+
+      - name: Проверить, что секреты заданы
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          missing=""
+          [ -z "$TELEGRAM_BOT_TOKEN" ] && missing="$missing TELEGRAM_BOT_TOKEN"
+          [ -z "$TELEGRAM_CHAT_ID" ] && missing="$missing TELEGRAM_CHAT_ID"
+          if [ -n "$missing" ]; then
+            echo "::error::Не заданы секреты репозитория:$missing"
+            echo "Добавьте их: Settings → Secrets and variables → Actions"
+            exit 1
+          fi
+          echo "Секреты на месте."
+
+      - name: Запуск
+        # Своё сообщение шаг сбора больше не шлёт: «что нового» теперь одной
+        # строкой в сводке, а отдельная сводка новинок была третьим
+        # сообщением об одном и том же.
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Контекст inputs пуст при запуске по расписанию — приводим к флагу в shell
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          FULL_REFRESH: ${{ github.event.inputs.full_refresh }}
+        run: |
+          flags=""
+          [ "$DRY_RUN" = "true" ] && flags="$flags --dry-run"
+          [ "$FULL_REFRESH" = "true" ] && flags="$flags --full-refresh"
+          landtender run $flags --no-notify --export-csv "data/new-$(date +%F).csv"
+
+      - name: Архив закрытых торгов — база сравнимых сделок
+        # Заход ограничен собственными часами и завершается сам, сохраняя
+        # собранное. Сбор накопительный — кеш отпечатков не даёт забирать
+        # одно и то же, поэтому каждый следующий заход берёт новые тендеры.
+        if: ${{ github.event.inputs.harvest == 'true' }}
+        env:
+          # Обе цены закрытого тендера — минимальная и цена сделки — нужны,
+          # чтобы посчитать надбавку торгов. Колонка появилась позже самого
+          # архива, поэтому у собранных раньше тендеров она пуста, а кеш
+          # отпечатков не даёт забрать детали повторно: один раз архив надо
+          # пройти с --refresh.
+          HARVEST_REFRESH: ${{ github.event.inputs.harvest_refresh }}
+        run: |
+          flags=""
+          [ "$HARVEST_REFRESH" = "true" ] && flags="--refresh"
+          landtender harvest $flags --minutes "${{ github.event.inputs.harvest_minutes || '165' }}"
+
+      - name: Кадастр govmap — добрать недостающие площади
+        # Площадь-заглушка («1 м²») закрывает лоту дорогу и в оценку, и в
+        # сравнимые. Ежедневный обход дополняет десятки лотов, накопленное
+        # так не закрыть — отсюда отдельный проход, ограниченный часами.
+        if: ${{ github.event.inputs.cadastre == 'true' }}
+        run: landtender enrich --minutes "${{ github.event.inputs.cadastre_minutes || '120' }}"
+
+      - name: Сводка одним сообщением
+        # Главный и единственный шаг, который читают глазами. До него в канал
+        # уходило около ста тридцати сообщений в день, и два полезных тонули
+        # в ста двадцати восьми. Здесь дельта за сутки, выводы и ссылка на
+        # таблицу; сама таблица уезжает файлом — по ней считают, а не читают.
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SEND_SUMMARY: ${{ github.event.inputs.send_summary || 'true' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          flags=""
+          [ "$SEND_SUMMARY" = "true" ] && [ "$DRY_RUN" != "true" ] && flags="--send --attach"
+          landtender summary --top 5 \
+            --farmland-max-usd 100000 --city ירושלים --city-max-usd 1000000 \
+            $flags --out "data/summary-$(date +%F).csv"
+
+      - name: Топ-10 предложений
+        # Показ не должен решать судьбу собранных данных. Падение на этом
+        # шаге роняет всё задание, а вместе с ним пропускается сохранение
+        # базы: один раз опечатка в импорте так стёрла сорок минут работы
+        # кадастра. База — актив, сводка — витрина; витрина ломается громко,
+        # но данные при этом остаются.
+        continue-on-error: true
+        # Балл пересчитывается на текущих сравнимых сделках, поэтому шаг идёт
+        # после сбора архива, а не до: иначе рейтинг строился бы на вчерашней
+        # базе.
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SEND_TOP: ${{ github.event.inputs.send_top || 'true' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          flags=""
+          [ "$SEND_TOP" = "true" ] && [ "$DRY_RUN" != "true" ] && flags="--send"
+          landtender top --limit 10 --why $flags --out "data/top-$(date +%F).csv"
+
+      - name: Сельхозземля дешевле $100 000
+        # Показ не должен решать судьбу собранных данных. Падение на этом
+        # шаге роняет всё задание, а вместе с ним пропускается сохранение
+        # базы: один раз опечатка в импорте так стёрла сорок минут работы
+        # кадастра. База — актив, сводка — витрина; витрина ломается громко,
+        # но данные при этом остаются.
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SEND_FARMLAND: ${{ github.event.inputs.send_farmland || 'true' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          flags=""
+          [ "$SEND_FARMLAND" = "true" ] && [ "$DRY_RUN" != "true" ] && flags="--send"
+          landtender farmland --max-usd 100000 --skip-empty $flags \
+            --out "data/farmland-$(date +%F).csv"
+
+      - name: Иерусалим — участки под жильё до $1 000 000
+        # Показ не должен решать судьбу собранных данных. Падение на этом
+        # шаге роняет всё задание, а вместе с ним пропускается сохранение
+        # базы: один раз опечатка в импорте так стёрла сорок минут работы
+        # кадастра. База — актив, сводка — витрина; витрина ломается громко,
+        # но данные при этом остаются.
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SEND_CITY: ${{ github.event.inputs.send_city || 'true' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          flags=""
+          [ "$SEND_CITY" = "true" ] && [ "$DRY_RUN" != "true" ] && flags="--send"
+          landtender city --city ירושלים --max-usd 1000000 --skip-empty $flags \
+            --out "data/jerusalem-$(date +%F).csv"
+        # Отбора по назначению здесь нет намеренно. Портал пишет назначение
+        # свободным текстом, и фильтр «מגורים» вырезал город целиком: из 213
+        # иерусалимских лотов не совпал ни один. Пока не видно, какие
+        # значения там на самом деле, узкий фильтр опаснее широкого — команда
+        # печатает перечень встреченных назначений, и по нему отбор сузится.
+
+      - name: Все предложения — полная выгрузка со всеми показателями
+        # Топ отвечает на «что брать», сводка — на «что нового». На вопрос
+        # «что вообще есть в базе и с какими числами» до этого шага не
+        # отвечала ни одна витрина. Строками уходит весь список, к нему
+        # прикладывается CSV — по нему считают, а не читают.
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SEND_ALL: ${{ github.event.inputs.send_all || 'true' }}
+          ALL_LIMIT: ${{ github.event.inputs.all_limit || '0' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          flags=""
+          [ "$SEND_ALL" = "true" ] && [ "$DRY_RUN" != "true" ] && flags="--send --attach"
+          landtender all --limit "$ALL_LIMIT" $flags --out "data/all-$(date +%F).csv"
+
+      - name: Сохранить выгрузку как артефакт
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: landtender-${{ github.run_id }}
+          path: data/*.csv
+          if-no-files-found: ignore
+          retention-days: 30

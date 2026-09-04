@@ -1,0 +1,23 @@
+# Конфиг с локальными настройками (пример лежит в landtender.example.toml)
+landtender.toml
+config.toml
+
+# Секреты: токен бота и chat_id (пример лежит в .env.example)
+.env
+
+# Данные и выгрузки
+data/
+*.sqlite3
+*.csv
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.coverage

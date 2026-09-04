@@ -1,0 +1,34 @@
+{
+  "data": {
+    "feed": {
+      "feed_items": [
+        {
+          "id": "abc123",
+          "link_token": "abc123",
+          "type": "ad",
+          "title_1": "מגרש למכירה",
+          "title_2": "רחוב הזית, כפר סבא",
+          "city": "כפר סבא",
+          "neighborhood": "הדרים",
+          "price": "6,200,000 ₪",
+          "square_meters": "780",
+          "date": "2026-07-20",
+          "HomeTypeID_text": "מגרשים"
+        },
+        {
+          "id": "def456",
+          "link_token": "def456",
+          "title_1": "מגרש לבנייה עצמית, 4 יח\"ד",
+          "city": "יבנה",
+          "price": "2,400,000 ₪",
+          "square_meters": "1,050",
+          "date": "2026-07-21"
+        },
+        {
+          "type": "banner",
+          "title_1": "פרסומת"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,12 @@
+[Unit]
+Description=Запускать сбор земельных тендеров раз в сутки
+
+[Timer]
+OnCalendar=*-*-* 09:00:00
+# Разброс, чтобы не бить по порталам ровно в начале часа
+RandomizedDelaySec=900
+# Догнать пропущенный запуск, если машина была выключена
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,92 @@
+name: Разведка API рм"י
+
+# Запускается вручную. Ничего не собирает и никуда не отправляет — только
+# печатает в лог то, что портал отдаёт по конкретным тендерам.
+on:
+  workflow_dispatch:
+    inputs:
+      tender_ids:
+        description: "Номера тендеров через пробел (пусто — первые из поиска)"
+        type: string
+        default: ""
+      limit:
+        description: "Сколько тендеров смотреть"
+        type: string
+        default: "3"
+      all_tenders:
+        description: "Искать среди всех, а не только активных"
+        type: boolean
+        default: false
+      ckan_query:
+        description: "Разведать наборы data.gov.il; запросов можно несколько через запятую"
+        type: string
+        default: ""
+      ckan_catalogue:
+        description: "Напечатать весь каталог data.gov.il — без догадок о терминах"
+        type: boolean
+        default: false
+      service:
+        description: "Разведать карт-сервис вместо рм\"י"
+        type: choice
+        options: ["", "iplan", "govmap", "nadlan", "macro"]
+        default: ""
+      gush:
+        description: "Гуш для примера (iplan, govmap)"
+        type: string
+        default: ""
+      helka:
+        description: "Хелка для примера участка (govmap)"
+        type: string
+        default: ""
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -e .
+
+      - name: Собрать конфиг с щадящим темпом запросов
+        run: |
+          cp landtender.example.toml landtender.toml
+          # Портал рвёт соединения при частых запросах — сбавляем темп
+          sed -i 's/^rate_limit_delay = .*/rate_limit_delay = 2.5/' landtender.toml
+          grep rate_limit_delay landtender.toml
+
+      - name: Разведка
+        env:
+          TENDER_IDS: ${{ github.event.inputs.tender_ids }}
+          LIMIT: ${{ github.event.inputs.limit }}
+          ALL_TENDERS: ${{ github.event.inputs.all_tenders }}
+          CKAN_QUERY: ${{ github.event.inputs.ckan_query }}
+          CKAN_CATALOGUE: ${{ github.event.inputs.ckan_catalogue }}
+          SERVICE: ${{ github.event.inputs.service }}
+          GUSH: ${{ github.event.inputs.gush }}
+          HELKA: ${{ github.event.inputs.helka }}
+        run: |
+          if [ -n "$SERVICE" ]; then
+            args=""
+            [ -n "$GUSH" ] && args="$args --gush $GUSH"
+            [ -n "$HELKA" ] && args="$args --helka $HELKA"
+            landtender inspect --service "$SERVICE" $args
+            exit $?
+          fi
+          if [ "$CKAN_CATALOGUE" = "true" ]; then
+            landtender inspect --ckan-catalogue
+            exit $?
+          fi
+          if [ -n "$CKAN_QUERY" ]; then
+            landtender inspect --ckan "$CKAN_QUERY" --limit "${LIMIT:-3}"
+            exit $?
+          fi
+          flags=""
+          [ "$ALL_TENDERS" = "true" ] && flags="--all"
+          landtender inspect $TENDER_IDS --limit "${LIMIT:-3}" $flags
