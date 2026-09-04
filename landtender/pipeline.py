@@ -645,6 +645,53 @@ def all_lots(
     return lots
 
 
+def summary_stats(
+    config: Config,
+    http: HttpClient,
+    storage: Storage,
+    days: int = 1,
+    farmland_max_usd: float | None = None,
+    city: str | None = None,
+    city_max_usd: float | None = None,
+) -> dict[str, Any]:
+    """Числа для сводки одним сообщением: что изменилось и что в базе.
+
+    Дневная ценность здесь — дельта, а не остаток: база меняется медленно, и
+    человеку, читающему сводку каждое утро, важно «что нового», а не «что
+    есть». «Что есть» лежит в CSV и не требует чтения глазами.
+    """
+    from datetime import timedelta
+
+    from .landuse import AGRICULTURE
+
+    since = (date.today() - timedelta(days=days)).isoformat()
+    lots = evaluate_lots(config, http, storage, active_lots(storage))
+    fresh = {lot.uid for lot in stored_lots(storage, since=since)}
+
+    priced = [lot for lot in lots if lot.price_nis]
+    estimated = [lot for lot in lots if lot.estimate_nis]
+    farmland = [lot for lot in lots if lot.land_use == AGRICULTURE]
+    if farmland_max_usd is not None:
+        farmland = [lot for lot in farmland if lot.price_usd and lot.price_usd <= farmland_max_usd]
+
+    city_lots_found: list[Lot] = []
+    city_counts: dict[str, int] = {}
+    if city:
+        city_lots_found, city_counts = select_city(storage, city=city, max_usd=city_max_usd)
+
+    return {
+        "новых за сутки": len([lot for lot in lots if lot.uid in fresh]),
+        "действующих лотов": len(lots),
+        "с ценой": len(priced),
+        "с оценкой": len(estimated),
+        "сельхоз под порогом": len(farmland),
+        "город": city or "",
+        "город: лотов": len(city_lots_found),
+        "город: воронка": city_counts,
+        "лоты": lots,
+    }
+
+
 def top_lots(
     config: Config,
     http: HttpClient,

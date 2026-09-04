@@ -35,9 +35,13 @@ on:
         type: boolean
         default: true
       all_limit:
-        description: "Сколько лотов показывать строками (0 — все; CSV всегда полный)"
+        description: "Сколько строк листинга слать в канал (0 — ни одной, только CSV)"
         type: string
         default: "0"
+      send_summary:
+        description: "Прислать сводку одним сообщением"
+        type: boolean
+        default: true
       cadastre:
         description: "Прогнать кадастр govmap по накопленной базе"
         type: boolean
@@ -105,6 +109,9 @@ jobs:
           echo "Секреты на месте."
 
       - name: Запуск
+        # Своё сообщение шаг сбора больше не шлёт: «что нового» теперь одной
+        # строкой в сводке, а отдельная сводка новинок была третьим
+        # сообщением об одном и том же.
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -115,7 +122,7 @@ jobs:
           flags=""
           [ "$DRY_RUN" = "true" ] && flags="$flags --dry-run"
           [ "$FULL_REFRESH" = "true" ] && flags="$flags --full-refresh"
-          landtender run $flags --export-csv "data/new-$(date +%F).csv"
+          landtender run $flags --no-notify --export-csv "data/new-$(date +%F).csv"
 
       - name: Архив закрытых торгов — база сравнимых сделок
         # Заход ограничен собственными часами и завершается сам, сохраняя
@@ -130,6 +137,24 @@ jobs:
         # так не закрыть — отсюда отдельный проход, ограниченный часами.
         if: ${{ github.event.inputs.cadastre == 'true' }}
         run: landtender enrich --minutes "${{ github.event.inputs.cadastre_minutes || '120' }}"
+
+      - name: Сводка одним сообщением
+        # Главный и единственный шаг, который читают глазами. До него в канал
+        # уходило около ста тридцати сообщений в день, и два полезных тонули
+        # в ста двадцати восьми. Здесь дельта за сутки, выводы и ссылка на
+        # таблицу; сама таблица уезжает файлом — по ней считают, а не читают.
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SEND_SUMMARY: ${{ github.event.inputs.send_summary || 'true' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          flags=""
+          [ "$SEND_SUMMARY" = "true" ] && [ "$DRY_RUN" != "true" ] && flags="--send --attach"
+          landtender summary --top 5 \
+            --farmland-max-usd 100000 --city ירושלים --city-max-usd 1000000 \
+            $flags --out "data/summary-$(date +%F).csv"
 
       - name: Топ-10 предложений
         # Показ не должен решать судьбу собранных данных. Падение на этом
@@ -166,7 +191,8 @@ jobs:
         run: |
           flags=""
           [ "$SEND_FARMLAND" = "true" ] && [ "$DRY_RUN" != "true" ] && flags="--send"
-          landtender farmland --max-usd 100000 $flags --out "data/farmland-$(date +%F).csv"
+          landtender farmland --max-usd 100000 --skip-empty $flags \
+            --out "data/farmland-$(date +%F).csv"
 
       - name: Иерусалим — участки под жильё до $1 000 000
         # Показ не должен решать судьбу собранных данных. Падение на этом
@@ -183,7 +209,7 @@ jobs:
         run: |
           flags=""
           [ "$SEND_CITY" = "true" ] && [ "$DRY_RUN" != "true" ] && flags="--send"
-          landtender city --city ירושלים --max-usd 1000000 $flags \
+          landtender city --city ירושלים --max-usd 1000000 --skip-empty $flags \
             --out "data/jerusalem-$(date +%F).csv"
         # Отбора по назначению здесь нет намеренно. Портал пишет назначение
         # свободным текстом, и фильтр «מגורים» вырезал город целиком: из 213

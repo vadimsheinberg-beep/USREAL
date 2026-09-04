@@ -553,13 +553,23 @@ class TestAllCommand:
     def test_it_runs_and_shows_every_lot(self, config_file, capsys):
         self.fill(config_file)
         capsys.readouterr()
-        assert cli.main(["--config", str(config_file), "all"]) == 0
+        assert cli.main(["--config", str(config_file), "all", "--full"]) == 0
         out = capsys.readouterr().out
         assert "Все предложения — полная выгрузка" in out
         # Оба лота на месте: и тот, что с ценой, и безымянный по цене.
         assert "с ценой" in out
         assert "безценный" in out
         assert "оценённый" in out
+
+    def test_by_default_the_rows_stay_in_the_csv(self):
+        """Сто двадцать сообщений листинга не читает никто — таблица в файле."""
+        from landtender.report import build_all_digest
+        from landtender.models import Lot
+
+        lots = [Lot(source="f", source_id=str(i), price_nis=1.0) for i in range(3)]
+        blocks = build_all_digest(lots, max_lots=0)
+        assert len(blocks) == 1
+        assert "Все 3 строк со всеми показателями — в приложенном CSV" in blocks[0]
 
     def test_it_counts_what_is_known(self, config_file, capsys):
         self.fill(config_file)
@@ -570,14 +580,14 @@ class TestAllCommand:
     def test_lots_with_a_price_come_first(self, config_file, capsys):
         self.fill(config_file)
         capsys.readouterr()
-        cli.main(["--config", str(config_file), "all"])
+        cli.main(["--config", str(config_file), "all", "--full"])
         out = capsys.readouterr().out
         assert out.index("оценённый") < out.index("безценный")
 
     def test_the_columns_are_named_before_the_rows(self, config_file, capsys):
         self.fill(config_file)
         capsys.readouterr()
-        cli.main(["--config", str(config_file), "all"])
+        cli.main(["--config", str(config_file), "all", "--full"])
         out = capsys.readouterr().out
         assert "цена ₪/м²" in out
         assert out.index("цена ₪/м²") < out.index("оценённый")
@@ -594,6 +604,116 @@ class TestAllCommand:
         capsys.readouterr()
         assert cli.main(["--config", str(config_file), "all", "--send"]) == 2
         assert "Нет токена" in capsys.readouterr().out
+
+
+class TestSummaryCommand:
+    """Сводка одним сообщением — то, что человек читает утром с телефона.
+
+    До неё в канал уходило около ста тридцати сообщений в день, и два
+    полезных тонули в ста двадцати восьми.
+    """
+
+    @pytest.fixture(autouse=True)
+    def scorable(self, monkeypatch):
+        from tests.test_pipeline import comparables_for
+
+        monkeypatch.setattr(
+            pipeline, "build_appraiser", lambda *a, **k: comparables_for("חיפה")
+        )
+        monkeypatch.setattr(pipeline, "backfill_settlement_codes", lambda *a, **k: 0)
+        monkeypatch.setattr(pipeline, "SOURCES_BY_NAME", {"fake": MixedSource})
+        monkeypatch.setattr(cli, "SOURCES_BY_NAME", {"fake": MixedSource})
+
+    def fill(self, config_file):
+        cli.main(["--config", str(config_file), "run", "--sources", "fake", "--no-notify"])
+
+    def test_it_fits_one_message(self, config_file, capsys):
+        self.fill(config_file)
+        capsys.readouterr()
+        assert cli.main(["--config", str(config_file), "summary"]) == 0
+        out = capsys.readouterr().out
+        assert "сообщение 1/1" in out
+        assert "Земельные тендеры" in out
+
+    def test_the_delta_comes_first(self, config_file, capsys):
+        """Ежедневная ценность — что изменилось, а не что лежит в базе."""
+        self.fill(config_file)
+        capsys.readouterr()
+        cli.main(["--config", str(config_file), "summary"])
+        out = capsys.readouterr().out
+        assert "Новых за сутки: 2" in out
+        assert out.index("Новых за сутки") < out.index("База:")
+
+    def test_it_names_what_to_look_at(self, config_file, capsys):
+        self.fill(config_file)
+        capsys.readouterr()
+        cli.main(["--config", str(config_file), "summary", "--top", "1"])
+        out = capsys.readouterr().out
+        assert "Что смотреть в первую очередь" in out
+        assert "оценённый" in out
+
+    def test_an_empty_slice_becomes_a_line_not_a_message(self, config_file, capsys):
+        self.fill(config_file)
+        capsys.readouterr()
+        cli.main([
+            "--config", str(config_file), "summary",
+            "--city", "Иерусалим", "--city-max-usd", "1000000",
+        ])
+        out = capsys.readouterr().out
+        assert "Срезы:" in out
+        assert "Иерусалим" in out
+
+    def test_it_points_at_the_csv(self, config_file, capsys):
+        self.fill(config_file)
+        capsys.readouterr()
+        cli.main(["--config", str(config_file), "summary"])
+        assert "в CSV" in capsys.readouterr().out
+
+
+class TestSkipEmptySlices:
+    """Пустой срез каждый день — сообщение ни о чём."""
+
+    @pytest.fixture(autouse=True)
+    def city_source(self, monkeypatch):
+        monkeypatch.setattr(pipeline, "SOURCES_BY_NAME", {"fake": JerusalemSource})
+        monkeypatch.setattr(cli, "SOURCES_BY_NAME", {"fake": JerusalemSource})
+
+    def fill(self, config_file):
+        cli.main(["--config", str(config_file), "run", "--sources", "fake", "--no-notify"])
+
+    def test_an_empty_city_slice_is_not_sent(self, config_file, capsys, monkeypatch):
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:AA")
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "-1001")
+        self.fill(config_file)
+        capsys.readouterr()
+        code = cli.main([
+            "--config", str(config_file), "city", "--city", "Тель-Авив",
+            "--send", "--skip-empty",
+        ])
+        assert code == 0
+        assert "Пропущено (пусто)" in capsys.readouterr().out
+
+    def test_a_slice_with_lots_still_goes_out(self, config_file, capsys, monkeypatch):
+        """Пропуск пустого не должен превратиться в пропуск вообще."""
+        sent = []
+
+        class FakeNotifier:
+            def __init__(self, **kwargs):
+                pass
+
+            def send_blocks(self, blocks):
+                sent.append(blocks)
+                return 1
+
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:AA")
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "-1001")
+        monkeypatch.setattr("landtender.notify.TelegramNotifier", FakeNotifier)
+        self.fill(config_file)
+        cli.main([
+            "--config", str(config_file), "city", "--city", "Иерусалим",
+            "--send", "--skip-empty",
+        ])
+        assert sent
 
 
 def test_stats_command_reports_empty_database(config_file, capsys):

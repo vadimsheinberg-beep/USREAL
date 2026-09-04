@@ -685,6 +685,74 @@ def _paginate(legend: str, rows: Sequence[str]) -> list[str]:
     return pages
 
 
+def build_summary_digest(
+    stats: dict[str, Any],
+    top: Sequence[Lot] = (),
+    max_usd_farmland: float | None = None,
+    city_max_usd: float | None = None,
+) -> list[str]:
+    """Сводка одним сообщением: что изменилось за сутки и что стоит смотреть.
+
+    Раньше в канал уходило около ста тридцати сообщений в день, и два
+    полезных тонули в ста двадцати восьми. Столько текста не читают — а
+    сводку читают именно глазами, один человек, с телефона, утром.
+
+    Поэтому здесь только дельта и выводы, а вся таблица со всеми
+    показателями уезжает файлом: по ней считают, а не читают.
+    """
+    lots = list(stats.get("лоты") or [])
+    bargains = [lot for lot in lots if _price_verdict(lot).startswith("🟢")]
+    starters = _reserve_below_estimate(lots)
+
+    lines = [
+        f"📊 <b>Земельные тендеры — {date.today().isoformat()}</b>",
+        f"<b>Новых за сутки: {stats.get('новых за сутки', 0)}</b>",
+        f"База: {stats.get('действующих лотов', 0)} действующих лотов · "
+        f"с ценой {stats.get('с ценой', 0)} · с оценкой {stats.get('с оценкой', 0)}",
+    ]
+    if bargains:
+        lines.append(f"🟢 Дешевле оценки более чем на 20%: {len(bargains)}")
+    if starters:
+        lines.append(f"Стартуют ниже оценки: {starters} (минимальная цена торгов, не рыночная)")
+
+    # Срезы отчитываются строкой, а не отдельным сообщением: пустой срез
+    # каждый день — это сообщение ни о чём, но и молча пропадать он не должен.
+    slices = []
+    farm = stats.get("сельхоз под порогом")
+    if farm is not None:
+        limit = f" до {fmt_usd(max_usd_farmland)}" if max_usd_farmland else ""
+        slices.append(f"сельхозземля{limit} — {farm}")
+    city = stats.get("город")
+    if city:
+        limit = f" до {fmt_usd(city_max_usd)}" if city_max_usd else ""
+        note = _why_empty(stats.get("город: воронка")) if not stats.get("город: лотов") else ""
+        slices.append(
+            f"{escape(city)}{limit} — {stats.get('город: лотов', 0)}"
+            + (f" ({note.rstrip('.').lower()})" if note else "")
+        )
+    if slices:
+        lines.append("Срезы: " + "; ".join(slices))
+
+    if top:
+        lines.append("")
+        lines.append("<b>Что смотреть в первую очередь:</b>")
+        for place, lot in enumerate(top, start=1):
+            link = escape(lot.tender_name or lot.source_id)
+            if lot.url:
+                link = f'<a href="{escape(lot.url)}">{link}</a>'
+            verdict = _price_verdict(lot)
+            facts = [fmt_nis_short(lot.price_nis)]
+            if lot.settlement:
+                facts.insert(0, escape(lot.settlement))
+            if verdict:
+                facts.append(verdict)
+            lines.append(f"{place}. {link} — " + " · ".join(facts))
+
+    lines.append("")
+    lines.append("Полная таблица со всеми показателями — в CSV ниже.")
+    return ["\n".join(lines)]
+
+
 def build_all_digest(
     lots: Sequence[Lot],
     only_active: bool = True,
@@ -731,6 +799,12 @@ def build_all_digest(
             "а не рыночная: сравнивать её с оценкой как скидку нельзя."
         )
     header.append("Порядок: сперва с баллом и ценой, затем остальные.")
+
+    if max_lots == 0:
+        # Строк в сообщении нет намеренно: их сто двадцать с лишним
+        # сообщений, и полезное в них тонет. Таблица целиком уходит файлом.
+        header.append(f"Все {len(lots)} строк со всеми показателями — в приложенном CSV.")
+        return ["\n".join(header)]
 
     shown = list(lots if max_lots is None else lots[:max_lots])
     lines = table_lines(shown)

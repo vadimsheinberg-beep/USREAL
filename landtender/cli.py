@@ -26,6 +26,7 @@ from .pipeline import (
 )
 from .report import (
     build_all_digest,
+    build_summary_digest,
     build_city_digest,
     build_console_report,
     build_farmland_digest,
@@ -88,6 +89,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     farm_cmd.add_argument("--send", action="store_true", help="отправить сводку в Telegram")
     farm_cmd.add_argument("--out", help="сохранить список в CSV")
+    farm_cmd.add_argument(
+        "--skip-empty", dest="skip_empty", action="store_true",
+        help="не отправлять сообщение, если под условия ничего не подошло",
+    )
     farm_cmd.add_argument("--limit", type=int, default=60, help="сколько лотов показать")
     farm_cmd.add_argument(
         "--max-usd", type=float,
@@ -147,13 +152,21 @@ def build_parser() -> argparse.ArgumentParser:
     city_cmd.add_argument("--send", action="store_true", help="отправить в Telegram")
     city_cmd.add_argument("--all", action="store_true", help="включая закрытые тендеры")
     city_cmd.add_argument("--out", help="выгрузить список в CSV")
+    city_cmd.add_argument(
+        "--skip-empty", dest="skip_empty", action="store_true",
+        help="не отправлять сообщение, если под условия ничего не подошло",
+    )
 
     all_cmd = sub.add_parser(
         "all", help="полная выгрузка: все предложения со всеми показателями"
     )
     all_cmd.add_argument(
         "--limit", type=int, default=0,
-        help="сколько лотов показать в сообщениях (0 — все; CSV всегда полный)",
+        help="сколько строк показать в сообщениях; 0 — ни одной, только CSV",
+    )
+    all_cmd.add_argument(
+        "--full", action="store_true",
+        help="показать в сообщениях весь список (сотня с лишним сообщений)",
     )
     all_cmd.add_argument("--send", action="store_true", help="отправить в Telegram")
     all_cmd.add_argument("--all", action="store_true", help="включая закрытые тендеры")
@@ -161,6 +174,20 @@ def build_parser() -> argparse.ArgumentParser:
     all_cmd.add_argument(
         "--attach", action="store_true",
         help="приложить CSV к сообщению (нужен --out)",
+    )
+
+    sum_cmd = sub.add_parser(
+        "summary", help="сводка одним сообщением: что изменилось за сутки"
+    )
+    sum_cmd.add_argument("--days", type=int, default=1, help="за сколько суток считать новое")
+    sum_cmd.add_argument("--top", type=int, default=5, help="сколько предложений назвать")
+    sum_cmd.add_argument("--city", help="город для строки среза")
+    sum_cmd.add_argument("--city-max-usd", dest="city_max_usd", type=float)
+    sum_cmd.add_argument("--farmland-max-usd", dest="farmland_max_usd", type=float)
+    sum_cmd.add_argument("--send", action="store_true", help="отправить в Telegram")
+    sum_cmd.add_argument("--out", help="выгрузить полную таблицу в CSV")
+    sum_cmd.add_argument(
+        "--attach", action="store_true", help="приложить CSV к сообщению (нужен --out)"
     )
 
     sub.add_parser("stats", help="показать состояние базы и последний запуск")
@@ -615,7 +642,8 @@ def cmd_city(args: argparse.Namespace) -> int:
         print(f"CSV: {args.out}")
 
     return _deliver(
-        config, blocks, args.send, f"Срез по городу отправлен: лотов {len(lots)}"
+        config, blocks, args.send, f"Срез по городу: лотов {len(lots)}",
+        skip=bool(getattr(args, "skip_empty", False) and not lots),
     )
 
 
@@ -648,7 +676,8 @@ def cmd_farmland(args: argparse.Namespace) -> int:
         print(f"CSV: {args.out}")
 
     return _deliver(
-        config, blocks, args.send, f"Сводка по сельхозземле отправлена: лотов {len(lots)}"
+        config, blocks, args.send, f"Сводка по сельхозземле: лотов {len(lots)}",
+        skip=bool(getattr(args, "skip_empty", False) and not lots),
     )
 
 
@@ -658,6 +687,7 @@ def _deliver(
     send: bool,
     summary: str,
     attach: Path | None = None,
+    skip: bool = False,
 ) -> int:
     """Показывает витрину в консоли или отправляет её в Telegram.
 
@@ -670,6 +700,12 @@ def _deliver(
 
     if not send:
         print(preview_messages(blocks))
+        return 0
+
+    if skip:
+        # Пустой срез каждый день — это сообщение ни о чём. Молча пропасть он
+        # тоже не должен, поэтому его число называет сводка отдельной строкой.
+        print(f"⊘ Пропущено (пусто): {summary}")
         return 0
 
     token = config.get("telegram", "bot_token")
@@ -713,12 +749,60 @@ def cmd_all(args: argparse.Namespace) -> int:
         export_csv(lots, out)
         print(f"CSV: {out}")
 
-    blocks = build_all_digest(
-        lots, only_active=not args.all, max_lots=args.limit or None
-    )
+    # Строки листинга по умолчанию не уходят: их сто двадцать с лишним
+    # сообщений, и два полезных в них тонут. Таблица целиком — в CSV.
+    max_lots = None if args.full else args.limit
+    blocks = build_all_digest(lots, only_active=not args.all, max_lots=max_lots)
     return _deliver(
         config, blocks, args.send,
         f"Полная выгрузка отправлена: лотов {len(lots)}",
+        attach=out if (args.attach and out is not None) else None,
+    )
+
+
+def cmd_summary(args: argparse.Namespace) -> int:
+    """Сводка одним сообщением: что изменилось за сутки и что смотреть.
+
+    Всё остальное — таблица со всеми показателями по всем предложениям —
+    уходит файлом. Сводку читает один человек с телефона, а по таблице
+    считают; это разные вещи, и мерить их одной формой нельзя.
+    """
+    from .pipeline import (
+        backfill_settlement_codes,
+        build_http,
+        summary_stats,
+        top_lots,
+    )
+
+    config = load_config(args.config)
+    config.data.setdefault("valuation", {})["estimate"] = True
+
+    http = build_http(config)
+    with open_storage(config, args.db) as storage:
+        backfill_land_use(storage)
+        backfill_settlement_codes(config, http, storage)
+        stats = summary_stats(
+            config, http, storage,
+            days=args.days,
+            farmland_max_usd=args.farmland_max_usd,
+            city=args.city,
+            city_max_usd=args.city_max_usd,
+        )
+        top = top_lots(config, http, storage, limit=args.top) if args.top else []
+
+    out = Path(args.out) if args.out else None
+    if out is not None:
+        export_csv(stats["лоты"], out)
+        print(f"CSV: {out}")
+
+    blocks = build_summary_digest(
+        stats, top=top,
+        max_usd_farmland=args.farmland_max_usd,
+        city_max_usd=args.city_max_usd,
+    )
+    return _deliver(
+        config, blocks, args.send,
+        f"Сводка отправлена: новых {stats['новых за сутки']}, всего {stats['действующих лотов']}",
         attach=out if (args.attach and out is not None) else None,
     )
 
@@ -766,6 +850,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_city(args)
     if command == "all":
         return cmd_all(args)
+    if command == "summary":
+        return cmd_summary(args)
     if command == "enrich":
         return cmd_enrich(args)
     if command == "harvest":
