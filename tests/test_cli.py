@@ -787,3 +787,45 @@ def test_help_is_available():
     with pytest.raises(SystemExit) as excinfo:
         cli.main(["--help"])
     assert excinfo.value.code == 0
+
+
+class TestHarvestRefresh:
+    """Перезабор архива — рычаг, на котором держится надбавка торгов.
+
+    Минимальная цена закрытого тендера появилась в модели позже самого
+    архива, и кеш отпечатков не даёт забрать детали повторно. Если флаг не
+    доходит до источника, архив так и останется без вторых цен, а надбавку
+    будет не из чего посчитать — молча и навсегда.
+    """
+
+    @pytest.fixture(autouse=True)
+    def rmi_source(self, monkeypatch):
+        """Архив собирается только с рм"и — под этим именем и подменяем."""
+        monkeypatch.setitem(pipeline.SOURCES_BY_NAME, "rmi_michrazim", OneLotSource)
+
+    @pytest.fixture
+    def calls(self, monkeypatch):
+        seen = []
+        real = pipeline.run_once
+
+        def spy(config, storage, **kw):
+            seen.append(kw)
+            return real(config, storage, **kw)
+
+        monkeypatch.setattr(cli, "run_once", spy)
+        return seen
+
+    def test_flag_reaches_the_source(self, config_file, calls, capsys):
+        cli.main(["--config", str(config_file), "harvest", "--refresh", "--minutes", "0"])
+        assert calls[0]["full_refresh"] is True
+
+    def test_ordinary_harvest_still_uses_the_cache(self, config_file, calls, capsys):
+        cli.main(["--config", str(config_file), "harvest", "--minutes", "0"])
+        assert calls[0]["full_refresh"] is False
+
+    def test_harvest_reports_where_the_pairs_are_lost(self, config_file, calls, capsys):
+        """Пустой архив обязан сказать, чего именно не хватает."""
+        cli.main(["--config", str(config_file), "harvest", "--minutes", "0"])
+        out = capsys.readouterr().out
+        assert "Надбавку торгов посчитать не на чем" in out
+        assert "годных пар" in out
