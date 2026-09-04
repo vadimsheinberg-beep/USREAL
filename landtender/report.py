@@ -9,7 +9,14 @@ from html import escape
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-from .models import TIER_PREMIUM, TIER_STANDARD, TIER_UNKNOWN, Lot, RunResult
+from .models import (
+    RESERVE_PRICE_KINDS,
+    TIER_PREMIUM,
+    TIER_STANDARD,
+    TIER_UNKNOWN,
+    Lot,
+    RunResult,
+)
 from .invest import SIGNAL_BADGES, SIGNAL_CONFIRMED, SIGNAL_LIKELY
 from .landuse import AGRICULTURE
 from .landuse import badge as landuse_badge
@@ -71,8 +78,7 @@ PRICE_KIND_TITLES = {
     "asking": "запрос",
 }
 
-#: Виды цены, которые нельзя сравнивать с оценкой как рыночную.
-RESERVE_PRICE_KINDS = frozenset({"min", "appraisal"})
+
 
 
 def _price_verdict(lot: Lot) -> str:

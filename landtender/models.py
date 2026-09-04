@@ -22,6 +22,11 @@ PRICE_KIND_MIN = "min"  # минимальная цена / מחיר מינימ�
 PRICE_KIND_APPRAISAL = "appraisal"  # оценка шамая / שומה
 PRICE_KIND_ASKING = "asking"  # запрашиваемая цена (частные площадки)
 
+#: Виды цены, которые нельзя сравнивать с оценкой как рыночные: это пороги и
+#: намерения, а не суммы, которые кто-то заплатил. Свойство самой цены, а не
+#: способа её показать, — поэтому живёт рядом с видами, а не в отчёте.
+RESERVE_PRICE_KINDS = frozenset({PRICE_KIND_MIN, PRICE_KIND_APPRAISAL})
+
 #: Как получено количество единиц строений.
 UNITS_REPORTED = "reported"  # пришло из источника (YechidotDiur и т.п.)
 UNITS_INFERRED = "inferred"  # выведено эвристикой (см. units.py)

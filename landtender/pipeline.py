@@ -11,7 +11,7 @@ from typing import Any, Sequence
 
 from .config import Config
 from .http import HttpClient
-from .models import Lot, RunResult, SourceReport
+from .models import RESERVE_PRICE_KINDS, Lot, RunResult, SourceReport
 from .money import FxProvider, FxRate, enrich_lot, utcnow_iso
 from .landuse import RESIDENTIAL
 from .places import matches as place_matches
@@ -143,8 +143,6 @@ def expected_price(lot: Lot, premium: Any) -> float | None:
     утверждало бы, что торги не поднимают цену, — то самое допущение,
     из-за которого 127 лотов из 159 значились дешёвкой.
     """
-    from .report import RESERVE_PRICE_KINDS
-
     if premium is None or lot.price_kind not in RESERVE_PRICE_KINDS:
         return None
     return premium.expected(lot.price_nis)
