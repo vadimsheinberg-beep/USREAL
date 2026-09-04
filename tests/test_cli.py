@@ -670,6 +670,37 @@ class TestSummaryCommand:
         assert "в CSV" in capsys.readouterr().out
 
 
+class TestBackfillRunsOnce:
+    """Коды населённых пунктов добираются раз в сутки, а не перед каждым показом.
+
+    Раньше это делала каждая витрина: пять одинаковых запросов на десять
+    тысяч тендеров, по три минуты каждый. Пятнадцать минут работы и четыре
+    лишних обращения к чужому порталу ради данных, которые не менялись с
+    первого раза.
+    """
+
+    @pytest.fixture
+    def counter(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            pipeline, "backfill_settlement_codes",
+            lambda *a, **k: calls.append(1) or 0,
+        )
+        return calls
+
+    def test_the_daily_run_does_it(self, config_file, counter):
+        cli.main(["--config", str(config_file), "run", "--sources", "fake", "--no-notify"])
+        assert len(counter) == 1
+
+    def test_the_views_do_not(self, config_file, counter, monkeypatch):
+        monkeypatch.setattr(pipeline, "build_appraiser", lambda *a, **k: [])
+        cli.main(["--config", str(config_file), "run", "--sources", "fake", "--no-notify"])
+        counter.clear()
+        for command in (["top"], ["all"], ["farmland"], ["city", "--city", "Хайфа"]):
+            cli.main(["--config", str(config_file), *command])
+        assert counter == []
+
+
 class TestSkipEmptySlices:
     """Пустой срез каждый день — сообщение ни о чём."""
 

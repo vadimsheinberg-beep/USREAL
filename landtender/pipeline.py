@@ -210,6 +210,12 @@ def run_once(
     started_at = utcnow_iso()
     backfill_land_use(storage)
     http = build_http(config)
+    # Коды населённых пунктов добираются здесь, один раз за сутки. Раньше это
+    # делала каждая витрина перед показом — пять одинаковых запросов на
+    # десять тысяч тендеров, по три минуты каждый: пятнадцать минут работы и
+    # четыре лишних обращения к чужому порталу ради данных, которые не
+    # менялись с первого раза.
+    backfill_settlement_codes(config, http, storage)
 
     fx = get_fx(config, http)
     log.info("Курс USD/ILS = %.4f (%s, %s)", fx.rate, fx.source, fx.as_of)

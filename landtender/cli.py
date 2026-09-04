@@ -510,13 +510,7 @@ def cmd_top(args: argparse.Namespace) -> int:
     в базе числа посчитаны в день загрузки лота, когда сравнимых было меньше,
     и рейтинг по ним сравнивал бы лоты по разным меркам.
     """
-    from .pipeline import (
-        active_lots,
-        backfill_settlement_codes,
-        build_http,
-        explain_top,
-        top_lots,
-    )
+    from .pipeline import active_lots, build_http, explain_top, top_lots
     from .valuation import gaps_by_source
 
     config = load_config(args.config)
@@ -531,7 +525,6 @@ def cmd_top(args: argparse.Namespace) -> int:
         backfill_land_use(storage)
         # Код населённого пункта — то, по чему участки сравниваются между
         # собой. У лотов, попавших в базу до появления колонки, он пуст.
-        backfill_settlement_codes(config, http, storage)
         lots = top_lots(config, http, storage, limit=args.limit, only_active=not args.all)
         breakdown = explain_top(config, http, storage) if args.why else {}
         by_source = gaps_by_source(active_lots(storage)) if args.why else {}
@@ -593,13 +586,7 @@ def cmd_city(args: argparse.Namespace) -> int:
     лоты из базы как есть, и в его строках стояли прочерки: числа в базе
     записаны в день загрузки лота, а у большинства не записаны вовсе.
     """
-    from .pipeline import (
-        backfill_settlement_codes,
-        build_http,
-        city_kinds,
-        evaluate_lots,
-        select_city,
-    )
+    from .pipeline import build_http, city_kinds, evaluate_lots, select_city
 
     config = load_config(args.config)
     config.data.setdefault("valuation", {})["estimate"] = True
@@ -607,7 +594,6 @@ def cmd_city(args: argparse.Namespace) -> int:
     http = build_http(config)
     with open_storage(config, args.db) as storage:
         backfill_land_use(storage)
-        backfill_settlement_codes(config, http, storage)
         lots, counts = select_city(
             storage,
             city=args.city,
@@ -653,7 +639,7 @@ def cmd_farmland(args: argparse.Namespace) -> int:
     Показатели, как и в остальных витринах, считаются заново: сохранённые в
     базе устарели в тот же день, когда база сравнимых сделок подросла.
     """
-    from .pipeline import backfill_settlement_codes, build_http, evaluate_lots
+    from .pipeline import build_http, evaluate_lots
 
     config = load_config(args.config)
     config.data.setdefault("valuation", {})["estimate"] = True
@@ -662,7 +648,6 @@ def cmd_farmland(args: argparse.Namespace) -> int:
     with open_storage(config, args.db) as storage:
         # База могла накопиться до появления разбора назначения — доразбираем
         backfill_land_use(storage)
-        backfill_settlement_codes(config, http, storage)
         lots = evaluate_lots(
             config, http, storage, farmland_lots(storage, only_active=not args.all)
         )
@@ -732,7 +717,7 @@ def cmd_all(args: argparse.Namespace) -> int:
     вопрос «что вообще есть в базе и с какими числами» до сих пор не
     отвечала ни одна витрина, хотя именно это и есть выгрузка.
     """
-    from .pipeline import all_lots, backfill_settlement_codes, build_http
+    from .pipeline import all_lots, build_http
 
     config = load_config(args.config)
     # Без оценки половина показателей — прочерки, а выгрузка обещает все.
@@ -741,7 +726,6 @@ def cmd_all(args: argparse.Namespace) -> int:
     http = build_http(config)
     with open_storage(config, args.db) as storage:
         backfill_land_use(storage)
-        backfill_settlement_codes(config, http, storage)
         lots = all_lots(config, http, storage, only_active=not args.all)
 
     out = Path(args.out) if args.out else None
@@ -767,12 +751,7 @@ def cmd_summary(args: argparse.Namespace) -> int:
     уходит файлом. Сводку читает один человек с телефона, а по таблице
     считают; это разные вещи, и мерить их одной формой нельзя.
     """
-    from .pipeline import (
-        backfill_settlement_codes,
-        build_http,
-        summary_stats,
-        top_lots,
-    )
+    from .pipeline import build_http, summary_stats, top_lots
 
     config = load_config(args.config)
     config.data.setdefault("valuation", {})["estimate"] = True
@@ -780,7 +759,6 @@ def cmd_summary(args: argparse.Namespace) -> int:
     http = build_http(config)
     with open_storage(config, args.db) as storage:
         backfill_land_use(storage)
-        backfill_settlement_codes(config, http, storage)
         stats = summary_stats(
             config, http, storage,
             days=args.days,
