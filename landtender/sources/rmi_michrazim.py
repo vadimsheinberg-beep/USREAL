@@ -521,6 +521,7 @@ def _lots_from_details(
             units_basis=basis,
             price_nis=price_nis,
             price_kind=price_kind,
+            reserve_price_nis=prices.get("min"),
             development_costs_nis=to_float(pick(node, DEVELOPMENT_KEYS)),
             guarantee_nis=to_float(pick(node, GUARANTEE_KEYS)) or meta.get("guarantee_nis"),
             published_date=meta["published_date"],

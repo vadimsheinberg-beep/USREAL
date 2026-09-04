@@ -150,3 +150,27 @@ class TestDensityOnPlaceholderArea:
         from landtender.scoring import score
         card = score(Lot(source="rmi_michrazim", source_id="1", area_sqm=1000.0, units=8))
         assert card.density == 100.0
+
+
+class TestPriceScoreUsesTheExpectedDeal:
+    """Балл цены сравнивает сравнимое: ожидаемую сделку с оценкой по сделкам."""
+
+    def test_start_raised_by_the_premium_scores_lower(self):
+        """Стартовая цена, поднятая надбавкой, перестаёт быть находкой.
+
+        Полмиллиона против оценки в миллион — сто баллов. Но если торги
+        поднимают старт вдвое, платить придётся ровно по оценке, и балл
+        обязан стать средним.
+        """
+        start = score(lot(price_nis=500_000.0, estimate_nis=1_000_000.0), TODAY)
+        real = score(
+            lot(price_nis=500_000.0, estimate_nis=1_000_000.0, expected_price_nis=1_000_000.0),
+            TODAY,
+        )
+        assert start.price == 100.0
+        assert real.price == 50.0
+
+    def test_without_a_premium_the_start_is_scored_as_before(self):
+        """Надбавки нет — подставлять единицу нельзя, это тоже утверждение."""
+        card = score(lot(price_nis=500_000.0, estimate_nis=1_000_000.0), TODAY)
+        assert card.price == 100.0

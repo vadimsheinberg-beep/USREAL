@@ -135,8 +135,29 @@ def _apply_estimate(lot: Lot, comparables: Any) -> None:
     lot.estimate_method = value.method
 
 
-def _apply_scoring(lot: Lot, options: dict[str, Any]) -> None:
-    """Пять показателей и совет по ставке. Считается локально, без сети."""
+def expected_price(lot: Lot, premium: Any) -> float | None:
+    """Ожидаемая цена сделки для лота со стартовой ценой.
+
+    У лота с ценой сделки поднимать нечего — она уже случилась. У лота без
+    надбавки ответа нет, и подставлять сюда единицу нельзя: это молча
+    утверждало бы, что торги не поднимают цену, — то самое допущение,
+    из-за которого 127 лотов из 159 значились дешёвкой.
+    """
+    from .report import RESERVE_PRICE_KINDS
+
+    if premium is None or lot.price_kind not in RESERVE_PRICE_KINDS:
+        return None
+    return premium.expected(lot.price_nis)
+
+
+def _apply_scoring(lot: Lot, options: dict[str, Any], premium: Any = None) -> None:
+    """Пять показателей и совет по ставке. Считается локально, без сети.
+
+    Перед подсчётом стартовая цена переводится в ожидаемую цену сделки —
+    иначе показатель цены сравнивал бы минимальную цену действующего тендера
+    с оценкой по ценам состоявшихся сделок и объявлял находкой само
+    устройство торгов.
+    """
     from .bidding import (
         DEFAULT_OVERHEAD,
         DEFAULT_PURCHASE_TAX,
@@ -145,6 +166,7 @@ def _apply_scoring(lot: Lot, options: dict[str, Any]) -> None:
     )
     from .scoring import score
 
+    lot.expected_price_nis = expected_price(lot, premium)
     card = score(lot)
     lot.score_total = card.total
     lot.score_price = card.price
@@ -230,6 +252,10 @@ def run_once(
     enricher = build_enricher(config, http)
     appraiser = build_appraiser(config, http, storage)
     bidding_options = dict(config.section("bidding"))
+    # Надбавка торгов берётся из архива до начала обхода: она одинакова для
+    # всех лотов, и пересчёт на каждом лоте означал бы чтение всей базы
+    # десять тысяч раз.
+    premium = build_premium(storage)
 
     result = RunResult(
         started_at=started_at,
@@ -257,7 +283,7 @@ def run_once(
                 enrich_lot(lot, fx, threshold, include_dev)
                 if appraiser is not None:
                     _apply_estimate(lot, appraiser)
-                _apply_scoring(lot, bidding_options)
+                _apply_scoring(lot, bidding_options, premium)
                 if lot.price_usd is None and not keep_priceless:
                     continue
                 report.lots += 1
@@ -613,11 +639,36 @@ def evaluate_lots(
         log.warning("Оценка недоступна, показатели цены будут пустыми: %s", exc)
         comparables = []
     bidding_options = config.section("bidding")
+    premium = build_premium(storage)
     for lot in lots:
         if comparables:
             _apply_estimate(lot, comparables)
-        _apply_scoring(lot, bidding_options)
+        _apply_scoring(lot, bidding_options, premium)
     return list(lots)
+
+
+def build_premium(storage: Storage) -> Any:
+    """Надбавка торгов к минимальной цене — одна на всю выгрузку.
+
+    Считается по архиву закрытых торгов и потому не зависит ни от лота, ни
+    от порядка показа: одно число, применяемое ко всем одинаково.
+    """
+    from .valuation import reserve_premium
+
+    premium = reserve_premium(stored_lots(storage))
+    if premium is None:
+        log.info(
+            "Надбавка торгов неизвестна: в архиве нет пар «минимум → сделка». "
+            "Показатель цены у действующих тендеров будет завышен — "
+            "запустите landtender harvest --refresh"
+        )
+    else:
+        log.info(
+            "Надбавка торгов к минимальной цене: ×%.2f (по %d сделкам)",
+            premium.factor,
+            premium.n,
+        )
+    return premium
 
 
 def rank_key(lot: Lot) -> tuple[int, float, float, float]:
@@ -680,6 +731,11 @@ def summary_stats(
     if farmland_max_usd is not None:
         farmland = [lot for lot in farmland if lot.price_usd and lot.price_usd <= farmland_max_usd]
 
+    # Надбавка торгов — самостоятельное число сводки, а не деталь расчёта:
+    # пока её нет, показатель цены у действующих тендеров завышен, и читатель
+    # вправе знать об этом раньше, чем начнёт доверять баллу.
+    premium = build_premium(storage)
+
     city_lots_found: list[Lot] = []
     city_counts: dict[str, int] = {}
     if city:
@@ -694,6 +750,7 @@ def summary_stats(
         "город": city or "",
         "город: лотов": len(city_lots_found),
         "город: воронка": city_counts,
+        "надбавка": premium,
         "лоты": lots,
     }
 

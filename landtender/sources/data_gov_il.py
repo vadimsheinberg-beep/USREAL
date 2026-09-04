@@ -159,6 +159,7 @@ def _row_to_lot(row: dict[str, Any], resource_id: str, package_name: str) -> Lot
         units_basis=basis,
         price_nis=price_nis,
         price_kind=price_kind,
+        reserve_price_nis=prices.get("min"),
         development_costs_nis=to_float(pick(row, DEVELOPMENT_KEYS)),
         published_date=to_iso_date(pick(row, PUBLISHED_KEYS)),
         closing_date=to_iso_date(pick(row, CLOSING_KEYS)),

@@ -108,6 +108,11 @@ def build_parser() -> argparse.ArgumentParser:
              "(сбор накопительный: следующий запуск добирает остальные)",
     )
     harvest_cmd.add_argument(
+        "--refresh", action="store_true",
+        help="перезабрать детали уже собранных тендеров, игнорируя кеш отпечатков "
+             "(нужно, когда в лоте появилось поле, которого не было при первом сборе)",
+    )
+    harvest_cmd.add_argument(
         "--minutes", type=float, default=165.0,
         help="сколько минут ходить за деталями; по истечении срока обход "
              "прекращается, и собранное сохраняется (0 — без ограничения)",
@@ -476,19 +481,43 @@ def cmd_harvest(args: argparse.Namespace) -> int:
 
     with open_storage(config, args.db) as storage:
         before = storage.count_lots()
-        result = run_once(config, storage, only_sources=["rmi_michrazim"])
+        result = run_once(
+            config,
+            storage,
+            only_sources=["rmi_michrazim"],
+            full_refresh=bool(getattr(args, "refresh", False)),
+        )
         after = storage.count_lots()
 
-        from .valuation import age_histogram, collect_comparables, explain_rejections
+        from .valuation import (
+            age_histogram,
+            collect_comparables,
+            explain_rejections,
+            premium_gap,
+            reserve_premium,
+        )
 
         rows = stored_lots(storage)
         deals = collect_comparables(rows)
         breakdown = explain_rejections(rows)
         years = age_histogram(rows)
+        premium = reserve_premium(rows)
+        pairs = premium_gap(rows)
 
     print(f"Просмотрено записей: {result.total_seen}")
     print(f"Лотов в базе: {before} → {after}")
     print(f"Сделок с ценой, годных для сравнения: {len(deals)}")
+    if premium is not None:
+        print(
+            f"Надбавка торгов к минимальной цене: ×{premium.factor:.2f} "
+            f"(медиана по {premium.n} сделкам)"
+        )
+    else:
+        # Без этого перечня «пар не хватает» — не ответ, а отговорка: не
+        # видно, на каком шаге они теряются и что с этим делать.
+        print("Надбавку торгов посчитать не на чем:")
+        for reason, count in pairs.items():
+            print(f"  {reason:<32} {count}")
     print("\nПочему остальные не годятся:")
     for reason, count in breakdown.items():
         print(f"  {reason:<28} {count}")

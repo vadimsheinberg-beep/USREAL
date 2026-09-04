@@ -259,3 +259,61 @@ class TestSettlementCodeGap:
         assert gap["без кода, тендер в выдаче есть"] == 1
         assert gap["без кода, тендера нет в выдаче"] == 1
         assert gap["без кода, номер тендера пуст"] == 1
+
+
+class TestMigrationOfAnOlderDatabase:
+    """Новая колонка не должна стоить накопленной базы.
+
+    ``CREATE TABLE IF NOT EXISTS`` старую таблицу не трогает, поэтому без
+    миграции первый же INSERT после добавления поля падал бы, а «починка»
+    сводилась бы к удалению базы — вместе с историей уведомлений: все
+    пятьдесят с лишним тысяч лотов уехали бы в канал повторно.
+    """
+
+    NEW_COLUMNS = ("reserve_price_nis", "expected_price_nis")
+
+    def old_database(self, path):
+        """База, созданная до появления новых колонок."""
+        import sqlite3
+
+        from landtender.storage import SCHEMA
+
+        schema = "\n".join(
+            line for line in SCHEMA.splitlines()
+            if not any(line.strip().startswith(name) for name in self.NEW_COLUMNS)
+        )
+        conn = sqlite3.connect(path)
+        conn.executescript(schema)
+        conn.execute(
+            "INSERT INTO lots (uid, source, source_id, price_nis, content_hash,"
+            " first_seen, last_seen) VALUES ('u1', 'rmi_michrazim', '1', 100.0,"
+            " 'hash', ?, ?)",
+            (NOW, NOW),
+        )
+        conn.commit()
+        conn.close()
+
+    def test_missing_columns_are_added_on_open(self, tmp_path):
+        path = tmp_path / "old.sqlite3"
+        self.old_database(path)
+        with Storage(path) as store:
+            columns = {row["name"] for row in store.conn.execute("PRAGMA table_info(lots)")}
+        assert set(self.NEW_COLUMNS) <= columns
+
+    def test_rows_collected_earlier_survive(self, tmp_path):
+        path = tmp_path / "old.sqlite3"
+        self.old_database(path)
+        with Storage(path) as store:
+            row = store.get_lot_row("u1")
+            assert row["price_nis"] == 100.0
+            assert row["reserve_price_nis"] is None
+
+    def test_writing_works_after_the_migration(self, tmp_path):
+        """Ради этого миграция и нужна: старая база принимает новый лот."""
+        path = tmp_path / "old.sqlite3"
+        self.old_database(path)
+        with Storage(path) as store:
+            store.upsert_lot(make_lot(reserve_price_nis=2_900_000.0), LATER)
+            store.commit()
+            saved = store.get_lot_row(make_lot().uid)
+        assert saved["reserve_price_nis"] == 2_900_000.0

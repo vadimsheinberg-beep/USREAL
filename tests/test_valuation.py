@@ -442,3 +442,71 @@ class TestGapsBySource:
             + [self.make("крупный", sid=str(i)) for i in range(3)]
         )
         assert list(rows) == ["крупный", "мелкий"]
+
+
+class TestReservePremium:
+    """Во сколько раз торги поднимают минимальную цену.
+
+    Это единственный мост между тем, что публикуют по действующему тендеру
+    (минимальная цена), и тем, на чём построена оценка (цены сделок). Без
+    него сравнение объявляло находкой само устройство торгов.
+    """
+
+    def pairs(self, ratio, n, **kw):
+        return [
+            deal(source_id=str(i), price=1_000_000.0 * ratio, reserve_price_nis=1_000_000.0, **kw)
+            for i in range(n)
+        ]
+
+    def test_median_ratio_of_closed_tenders(self):
+        from landtender.valuation import reserve_premium
+
+        premium = reserve_premium(self.pairs(1.4, 40))
+        assert premium is not None
+        assert premium.factor == pytest.approx(1.4)
+        assert premium.n == 40
+
+    def test_thin_sample_gives_no_premium(self):
+        """Медиана по десятку тендеров говорит о десятке, а не о торгах."""
+        from landtender.valuation import reserve_premium
+
+        assert reserve_premium(self.pairs(1.4, 5)) is None
+
+    def test_active_tenders_do_not_calibrate_themselves(self):
+        """У действующего тендера цены сделки нет — калибровать нечем."""
+        from landtender.valuation import reserve_premium
+
+        rows = [
+            deal(source_id=str(i), price=1_000_000.0, price_kind="min",
+                 reserve_price_nis=1_000_000.0)
+            for i in range(40)
+        ]
+        assert reserve_premium(rows) is None
+
+    def test_absurd_ratios_are_dropped(self):
+        """Символическая минимальная цена не характеризует торги."""
+        from landtender.valuation import reserve_premium
+
+        rows = self.pairs(1.4, 40) + [
+            deal(source_id="x", price=1_000_000.0, reserve_price_nis=1.0),
+            deal(source_id="y", price=1_000.0, reserve_price_nis=1_000_000.0),
+        ]
+        premium = reserve_premium(rows)
+        assert premium.n == 40
+        assert premium.factor == pytest.approx(1.4)
+
+    def test_gap_names_the_step_where_pairs_are_lost(self):
+        """«Пар не хватает» — не ответ, пока не видно, где они теряются."""
+        from landtender.valuation import premium_gap
+
+        rows = [
+            deal(source_id="1", price=1_400_000.0, reserve_price_nis=1_000_000.0),
+            deal(source_id="2", price=1_400_000.0),  # сделка есть, минимума нет
+            deal(source_id="3", price=1_000_000.0, price_kind="min"),  # ещё не состоялась
+            deal(source_id="4", price=1_000_000.0, reserve_price_nis=1.0),  # символический старт
+        ]
+        gap = premium_gap(rows)
+        assert gap["состоявшихся сделок"] == 3
+        assert gap["из них с минимальной ценой"] == 2
+        assert gap["отношение вне разумных границ"] == 1
+        assert gap["годных пар"] == 1

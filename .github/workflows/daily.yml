@@ -22,6 +22,10 @@ on:
         description: "Собрать архив закрытых торгов — база сравнимых сделок"
         type: boolean
         default: false
+      harvest_refresh:
+        description: "Перезабрать уже собранный архив (нужно один раз — ради минимальных цен закрытых торгов)"
+        type: boolean
+        default: false
       send_city:
         description: "Прислать в канал срез по Иерусалиму"
         type: boolean
@@ -129,7 +133,17 @@ jobs:
         # собранное. Сбор накопительный — кеш отпечатков не даёт забирать
         # одно и то же, поэтому каждый следующий заход берёт новые тендеры.
         if: ${{ github.event.inputs.harvest == 'true' }}
-        run: landtender harvest --minutes "${{ github.event.inputs.harvest_minutes || '165' }}"
+        env:
+          # Обе цены закрытого тендера — минимальная и цена сделки — нужны,
+          # чтобы посчитать надбавку торгов. Колонка появилась позже самого
+          # архива, поэтому у собранных раньше тендеров она пуста, а кеш
+          # отпечатков не даёт забрать детали повторно: один раз архив надо
+          # пройти с --refresh.
+          HARVEST_REFRESH: ${{ github.event.inputs.harvest_refresh }}
+        run: |
+          flags=""
+          [ "$HARVEST_REFRESH" = "true" ] && flags="--refresh"
+          landtender harvest $flags --minutes "${{ github.event.inputs.harvest_minutes || '165' }}"
 
       - name: Кадастр govmap — добрать недостающие площади
         # Площадь-заглушка («1 м²») закрывает лоту дорогу и в оценку, и в

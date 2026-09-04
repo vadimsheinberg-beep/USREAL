@@ -118,6 +118,90 @@ class Valuation:
         return self.high_nis / self.low_nis
 
 
+#: Меньше этого числа пар «минимум → сделка» надбавку считать не на чем:
+#: медиана по десятку тендеров скажет больше о десятке, чем о торгах.
+MIN_PREMIUM_DEALS = 30
+
+#: Разумные границы отношения «цена сделки / минимальная цена». Ниже единицы
+#: продать по закону нельзя — такая пара означает, что в одно из двух полей
+#: попало не то. Сверху отсечка нужна против тендеров, где минимальная цена
+#: указана символической: отношение в сотни раз не характеризует торги.
+PREMIUM_BAND = (1.0, 10.0)
+
+
+@dataclass(frozen=True)
+class ReservePremium:
+    """Во сколько раз торги поднимают минимальную цену — по архиву.
+
+    Считается по парам внутри одного тендера, поэтому ни инфляция, ни
+    поправка на время сюда не входят: начало и конец торгов разделяют
+    недели, а не годы. Это делает надбавку самой устойчивой величиной из
+    всех, что здесь считаются, — она не зависит ни от индекса, ни от
+    регрессии, только от двух чисел одного и того же тендера.
+    """
+
+    factor: float
+    n: int
+
+    def expected(self, price_nis: float | None) -> float | None:
+        return price_nis * self.factor if price_nis else None
+
+
+def reserve_premium(rows: list[Lot], today: date | None = None) -> ReservePremium | None:
+    """Медианное отношение «цена сделки / минимальная цена» по архиву.
+
+    Зачем это нужно. Оценка строится на ценах состоявшихся сделок, а у
+    действующего тендера цены сделки ещё нет — есть минимальная. Сравнивая
+    их напрямую, мы почти всегда получали «дешевле оценки»: минимальная
+    цена ниже рыночной по построению, это устройство торгов, а не находка.
+    Надбавка переводит старт в ожидаемую цену сделки, и сравнение
+    становится сравнением сопоставимых величин.
+
+    Медиана, а не среднее: несколько тендеров с символической минимальной
+    ценой утянули бы среднее в потолок.
+    """
+    ratios = [
+        lot.price_nis / lot.reserve_price_nis
+        for lot in rows
+        if lot.price_kind == "final"
+        and lot.price_nis
+        and lot.reserve_price_nis
+        and lot.reserve_price_nis > 0
+        and PREMIUM_BAND[0] <= lot.price_nis / lot.reserve_price_nis <= PREMIUM_BAND[1]
+    ]
+    if len(ratios) < MIN_PREMIUM_DEALS:
+        return None
+    return ReservePremium(factor=median(ratios), n=len(ratios))
+
+
+def premium_gap(rows: list[Lot]) -> dict[str, int]:
+    """Почему надбавку не посчитать — по шагам отбора.
+
+    Нужна ровно затем же, зачем перечень причин у оценки: «пар не хватает» —
+    это не ответ, пока не видно, на каком шаге они теряются.
+    """
+    counts = {
+        "всего в базе": len(rows),
+        "состоявшихся сделок": 0,
+        "из них с минимальной ценой": 0,
+        "отношение вне разумных границ": 0,
+        "годных пар": 0,
+    }
+    for lot in rows:
+        if lot.price_kind != "final" or not lot.price_nis:
+            continue
+        counts["состоявшихся сделок"] += 1
+        if not lot.reserve_price_nis or lot.reserve_price_nis <= 0:
+            continue
+        counts["из них с минимальной ценой"] += 1
+        ratio = lot.price_nis / lot.reserve_price_nis
+        if not PREMIUM_BAND[0] <= ratio <= PREMIUM_BAND[1]:
+            counts["отношение вне разумных границ"] += 1
+            continue
+        counts["годных пар"] += 1
+    return counts
+
+
 def collect_comparables(
     rows: list[Lot],
     housing_index: list[IndexPoint] | None = None,

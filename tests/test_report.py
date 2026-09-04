@@ -812,3 +812,59 @@ class TestReserveStartersInTheFullExport:
         text = "\n".join(build_all_digest([self.make("final")]))
         assert "🟢 Дешевле оценки более чем на 20%: 1" in text
         assert "Стартуют ниже оценки" not in text
+
+
+class TestVerdictWithTheAuctionPremium:
+    """Зелёный кружок у стартовой цены — только когда надбавка известна."""
+
+    def make(self, **kw):
+        data = dict(source_id="1", price_nis=4_000_000.0,
+                    estimate_nis=10_000_000.0, price_kind="min")
+        data.update(kw)
+        return lot(**data)
+
+    def test_start_that_stays_cheap_after_the_premium_is_a_find(self):
+        from landtender.report import _price_verdict
+
+        verdict = _price_verdict(self.make(expected_price_nis=5_600_000.0))
+        assert verdict.startswith("🟢")
+        assert "−44% к оценке" in verdict
+        assert "×1.40" in verdict
+
+    def test_start_that_the_premium_lifts_to_the_estimate_is_not_a_find(self):
+        """Дешёвый старт при вдвое поднимающих торгах — не находка."""
+        from landtender.report import _price_verdict
+
+        assert _price_verdict(self.make(expected_price_nis=10_000_000.0)) == ""
+
+    def test_premium_can_turn_a_cheap_start_into_an_overpay(self):
+        from landtender.report import _price_verdict
+
+        verdict = _price_verdict(self.make(expected_price_nis=14_000_000.0))
+        assert verdict.startswith("🔴")
+
+    def test_without_a_premium_it_is_still_only_a_start(self):
+        from landtender.report import _price_verdict
+
+        assert _price_verdict(self.make()) == "старт на 60% ниже оценки"
+
+
+class TestSummaryStatesWhatItCanBeTrusted:
+    """Сводка сама говорит, завышен ли в ней балл цены."""
+
+    def test_known_premium_is_shown_with_its_sample(self):
+        from landtender.report import build_summary_digest
+        from landtender.valuation import ReservePremium
+
+        stats = {"новых за сутки": 1, "действующих лотов": 2, "лоты": [],
+                 "надбавка": ReservePremium(factor=1.42, n=214)}
+        text = "\n".join(build_summary_digest(stats))
+        assert "×1.42" in text
+        assert "214" in text
+
+    def test_missing_premium_is_a_warning_not_a_silence(self):
+        from landtender.report import build_summary_digest
+
+        text = "\n".join(build_summary_digest({"лоты": [], "надбавка": None}))
+        assert "Надбавка торгов неизвестна" in text
+        assert "завышен" in text

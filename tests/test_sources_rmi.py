@@ -123,6 +123,21 @@ class TestRealPortalSchema:
         lot = next(iter(make_source(routes).fetch()))
         assert (lot.price_nis, lot.price_kind) == (4_000_000.0, "appraisal")
 
+    def test_minimum_price_survives_the_winning_bid(self):
+        """Обе цены закрытого тендера, а не одна из них.
+
+        Пара «с чего начали / чем кончилось» — единственный источник знания
+        о том, во сколько раз торги поднимают старт. Раньше выбор одной цены
+        стирал вторую, и вопрос было не задать: 2 900 000 → 3 610 000.
+        """
+        lot = self.lots()["20260123:10769/43/70113196ב"]
+        assert (lot.price_nis, lot.price_kind) == (3_610_000.0, "final")
+        assert lot.reserve_price_nis == 2_900_000.0
+
+    def test_active_tender_keeps_its_minimum_in_both_fields(self):
+        lot = self.lots()["20260123:10769/42/70113195א"]
+        assert lot.price_nis == lot.reserve_price_nis == 18_500_000.0
+
     def test_hotzaot_pituach_is_development_cost(self):
         assert self.lots()["20260123:10769/42/70113195א"].development_costs_nis == 3_400_000.0
 

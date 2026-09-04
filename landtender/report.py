@@ -87,8 +87,20 @@ def _price_verdict(lot: Lot) -> str:
         return ""
     ratio = lot.price_nis / lot.estimate_nis
     if lot.price_kind in RESERVE_PRICE_KINDS:
-        # Число всё равно полезно — оно показывает, с какого уровня стартуют
-        # торги, — но подаётся как старт, а не как выигрыш.
+        if lot.expected_price_nis:
+            # Надбавку по архиву посчитать удалось — значит, сравнивать есть
+            # что с чем: ожидаемую цену сделки с оценкой по сделкам. Только
+            # здесь у стартовой цены появляется право на зелёный кружок.
+            expected = lot.expected_price_nis / lot.estimate_nis
+            times = lot.expected_price_nis / lot.price_nis
+            if expected <= BARGAIN_RATIO:
+                return f"🟢 −{(1 - expected) * 100:.0f}% к оценке с надбавкой ×{times:.2f}"
+            if expected >= OVERPRICED_RATIO:
+                return f"🔴 +{(expected - 1) * 100:.0f}% к оценке с надбавкой ×{times:.2f}"
+            return ""
+        # Надбавка неизвестна. Число всё равно полезно — оно показывает, с
+        # какого уровня стартуют торги, — но подаётся как старт, а не как
+        # выигрыш: минимальная цена ниже рыночной по построению.
         if ratio <= BARGAIN_RATIO:
             return f"старт на {(1 - ratio) * 100:.0f}% ниже оценки"
         if ratio >= OVERPRICED_RATIO:
@@ -715,6 +727,21 @@ def build_summary_digest(
     if starters:
         lines.append(f"Стартуют ниже оценки: {starters} (минимальная цена торгов, не рыночная)")
 
+    # Надбавка объясняет, чему в этой сводке можно верить. С ней «дешевле
+    # оценки» означает ожидаемую цену сделки; без неё — только стартовую,
+    # которая ниже рыночной по построению.
+    premium = stats.get("надбавка")
+    if premium is not None:
+        lines.append(
+            f"Торги поднимают минимальную цену в ×{premium.factor:.2f} раза "
+            f"(медиана по {premium.n} сделкам архива) — балл цены считается по ней"
+        )
+    else:
+        lines.append(
+            "⚠️ Надбавка торгов неизвестна: в архиве нет пар «минимум → сделка». "
+            "Балл цены у стартовых цен завышен — нужен landtender harvest --refresh"
+        )
+
     # Срезы отчитываются строкой, а не отдельным сообщением: пустой срез
     # каждый день — это сообщение ни о чём, но и молча пропадать он не должен.
     slices = []
@@ -937,7 +964,7 @@ EXPORT_FIELDS = (
     "score_market", "score_timing", "score_coverage",
     "max_bid_nis", "bid_headroom_pct", "roi_at_min",
     "units", "units_basis",
-    "price_nis", "price_kind", "price_per_sqm_nis", "development_costs_nis", "guarantee_nis", "price_usd", "price_per_unit_usd", "price_per_sqm_usd",
+    "price_nis", "price_kind", "reserve_price_nis", "expected_price_nis", "price_per_sqm_nis", "development_costs_nis", "guarantee_nis", "price_usd", "price_per_unit_usd", "price_per_sqm_usd",
     "tier", "published_date", "opening_date", "closing_date", "url",
 )
 

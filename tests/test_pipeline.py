@@ -746,3 +746,58 @@ class TestCityLots:
                 price_usd=100.0, closing_date="2020-01-01"),
         ])
         assert pipeline.city_lots(storage, city="Иерусалим") == []
+
+
+class TestAuctionPremiumReachesTheLots:
+    """Надбавка из архива доходит до действующих лотов — иначе она бесполезна."""
+
+    def archive(self, n=40, ratio=1.4):
+        """Закрытые торги: с чего начали и чем кончились."""
+        return [
+            lot(
+                source_id=f"archive-{i}",
+                price_nis=1_000_000.0 * ratio,
+                price_kind="final",
+                reserve_price_nis=1_000_000.0,
+                area_sqm=1000.0,
+                closing_date="2025-06-01",
+            )
+            for i in range(n)
+        ]
+
+    def fill(self, storage, rows):
+        for row in rows:
+            storage.upsert_lot(row, "2026-09-01T00:00:00Z")
+        storage.commit()
+
+    def test_start_price_becomes_an_expected_deal(self, storage):
+        self.fill(storage, self.archive())
+        active = lot(source_id="active", price_nis=2_000_000.0, price_kind="min",
+                     reserve_price_nis=2_000_000.0)
+
+        evaluated = pipeline.evaluate_lots(make_config(), object(), storage, [active])
+        assert evaluated[0].expected_price_nis == pytest.approx(2_800_000.0)
+
+    def test_a_closed_deal_is_not_raised_again(self, storage):
+        """Цена сделки уже случилась — поднимать её надбавкой нечем."""
+        self.fill(storage, self.archive())
+        done = lot(source_id="done", price_nis=2_000_000.0, price_kind="final")
+
+        evaluated = pipeline.evaluate_lots(make_config(), object(), storage, [done])
+        assert evaluated[0].expected_price_nis is None
+
+    def test_empty_archive_leaves_the_start_price_alone(self, storage):
+        """Без пар подставлять множитель нельзя: единица — тоже утверждение."""
+        active = lot(source_id="active", price_nis=2_000_000.0, price_kind="min",
+                     reserve_price_nis=2_000_000.0)
+
+        evaluated = pipeline.evaluate_lots(make_config(), object(), storage, [active])
+        assert evaluated[0].expected_price_nis is None
+
+    def test_both_prices_survive_the_database(self, storage):
+        """Колонка без миграции стоила бы всей истории уведомлений."""
+        self.fill(storage, [lot(source_id="pair", price_nis=3_610_000.0,
+                                price_kind="final", reserve_price_nis=2_900_000.0)])
+        stored = {row.source_id: row for row in pipeline.stored_lots(storage)}
+        assert stored["pair"].reserve_price_nis == 2_900_000.0
+        assert stored["pair"].price_nis == 3_610_000.0

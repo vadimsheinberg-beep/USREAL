@@ -235,6 +235,7 @@ def _row_to_lot(row: dict[str, Any], resource_id: str, package_name: str) -> Lot
         has_structure=True,
         price_nis=price_nis,
         price_kind=price_kind,
+        reserve_price_nis=prices.get("min"),
         published_date=to_iso_date(pick(row, DECLARED_KEYS)) or to_iso_date(pick(row, PUBLISHED_KEYS)),
         closing_date=to_iso_date(pick(row, CLOSING_KEYS)),
         raw=row,
